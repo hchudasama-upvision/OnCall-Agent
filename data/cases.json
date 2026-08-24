@@ -1,0 +1,288 @@
+[
+  {
+    "fingerprint": "NFSConnectionCheckFailed/aiware-prod1",
+    "alertname": "NFSConnectionCheckFailed",
+    "alert_pattern": "[FIRING:1] nfs critical (NFSConnectionCheckFailed aiware prod1 localhost:9100 node-exporter <IP> 2049 <region>)",
+    "environment": "aiware prod1 (NFS shard fleet)",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": 30,
+    "diagnosis_steps": [
+      "Map the alert IP to the NFS shard number and cloud instance ID; post 'Instance: <id>, IP: <ip>, Shard: <n>' in thread",
+      "Test the NFS port directly: nc -w 10 -v <IP> 2049 (times out when hung)",
+      "Check cloud instance status - 'Instance reachability check failed' has appeared with 99% CPU",
+      "If SSH works: systemctl status nfs-server && systemctl status aiware-agent",
+      "Check nfsd kernel threads: grep ^th /proc/net/rpc/nfsd (fleet default 80 has been repeatedly insufficient)",
+      "Check for hung processes: ps -eo state,pid,cmd | grep '^D' - 100+ nfsd processes in D state means NFS is hung; load average will sit at ~130",
+      "Check dmesg for 'nfsd: too many open connections, consider increasing the number of threads'"
+    ],
+    "resolution_steps": [
+      "If reachability failed, high CPU, or many D-state processes: REBOOT the instance (service restart will NOT recover hung nfsd - confirmed by senior engineer)",
+      "After boot verify nfs-server active and aiware-agent running; if the data path is not mounted, remount the data volume (check lsblk vs /etc/fstab) before starting nfs-server",
+      "Raise nfsd threads: rpc.nfsd 128, verify with grep ^th /proc/net/rpc/nfsd",
+      "Verify: nc -w 3 -v <IP> 2049 -> 'succeeded!'",
+      "Verify agent wrote its shard json (log line 'NFS - Successfully wrote .../nfs/<shard>.json')",
+      "Post outputs in thread; 'Alert resolved.'"
+    ],
+    "gotchas": [
+      "Alert commonly RE-FIRES within 1-2 hours if the box is degrading; monitor load after reboot, re-reboot if D-state processes accumulate again",
+      "systemctl restart of nfs-server/agent does not clear D-state hangs; only reboot does",
+      "On one occurrence the data volume did not remount at boot (exportfs: 'Failed to stat' the export path) - had to mount the data disk and swap device manually, then restart the agent",
+      "After an instance is recycled, shard reassignment bugs have occurred (instance re-registering with a different shard number, orphaning tasks assigned to the old shard). If jobs pile up on a shard with no active host, escalate to the edge platform team",
+      "Team has discussed OS upgrade as the structural fix for recurring nfsd hangs"
+    ],
+    "escalation": "Edge platform / senior SRE if shard mapping is inconsistent in the edge host table or jobs are stuck on a missing shard",
+    "example_commands": [
+      "nc -w 10 -v <IP> 2049",
+      "systemctl status nfs-server && systemctl status aiware-agent",
+      "grep ^th /proc/net/rpc/nfsd && rpc.nfsd 128",
+      "ps -eo state,pid,cmd | grep '^D' | wc -l",
+      "uptime",
+      "lsblk && df -h"
+    ]
+  },
+  {
+    "fingerprint": "KubePersistentVolumeFillingUp/*",
+    "alertname": "KubePersistentVolumeFillingUp",
+    "alert_pattern": "[FIRING:1] <cluster> : KubePersistentVolumeFillingUp - PVC <name> in <cluster> is only N% free",
+    "environment": "any k8s cluster (seen on transcode scratch storage)",
+    "occurrences_observed": 1,
+    "typical_resolution_minutes": 27,
+    "diagnosis_steps": [
+      "Extract PVC name and namespace from alert (alert body includes 'PVC <name> filling up in <cluster>' and % free)",
+      "Confirm current usage on the storage dashboard; post the panel screenshot showing % free",
+      "Check whether the writer is a transcode/scratch workload - these fill during big jobs and MAY self-recover when the job completes",
+      "Check the runbook link embedded in the alert (Runbook: KubePersistentVolumeFillingUp - Resizing PVCs)"
+    ],
+    "resolution_steps": [
+      "Resize the PVC upward (observed: +50GB on a volume at ~8% free), per the resizing-PVCs runbook",
+      "Verify free space recovers (observed: 8% -> 39% free after adding 50GB)",
+      "Post the after screenshot in thread; resolved"
+    ],
+    "gotchas": [
+      "PVCs only grow, never shrink - size increases are permanent cost",
+      "Ack the VictorOps incident early so it doesn't escalate while you work"
+    ],
+    "escalation": "App owner if the same PVC needs resizing repeatedly (indicates a leak/retention problem, not capacity)",
+    "example_commands": [
+      "kubectl get pvc <name> -n <ns>",
+      "kubectl patch pvc <name> -n <ns> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"<new>Gi\"}}}}'"
+    ]
+  },
+  {
+    "fingerprint": "AlbUnhealthyHostCritical/us-1-prod",
+    "alertname": "AlbUnhealthyHostCritical",
+    "alert_pattern": "[FIRING:1] us-1 : prod - AlbUnhealthyHostCritical",
+    "environment": "us-1 prod (haproxy/api target groups)",
+    "occurrences_observed": 1,
+    "typical_resolution_minutes": 10,
+    "diagnosis_steps": [
+      "Identify the target group (observed: the prod haproxy api http target group)",
+      "Check if the unhealthy target is a NEWLY LAUNCHED instance (autoscaling event) - post the target-health screenshot"
+    ],
+    "resolution_steps": [
+      "If newly launched: wait for warm-up; observed healthy within ~9 minutes with no action",
+      "Post the healthy-state screenshot; resolved"
+    ],
+    "gotchas": [
+      "Do not act in the first 5-10 minutes for fresh instances; most resolve on their own",
+      "If it stays unhealthy past warm-up, check the service on the health-check port and instance system log"
+    ],
+    "escalation": "None for warm-up cases",
+    "example_commands": [
+      "aws elbv2 describe-target-health --target-group-arn <arn>"
+    ]
+  },
+  {
+    "fingerprint": "ApiSuccessRate-nginx/*",
+    "alertname": "API Success Rate - nginx",
+    "alert_pattern": "[FIRING:1] <env> - API Success Rate - nginx <cluster/platform>",
+    "environment": "any nginx-fronted API env (seen on cloud gov clusters)",
+    "occurrences_observed": 2,
+    "typical_resolution_minutes": 40,
+    "diagnosis_steps": [
+      "Reproduce/spot-check: is the API returning 5xx right now (503 Service Temporarily Unavailable observed during incident)",
+      "Query the log platform for the window: upstreamStatus >= 500 and upstreamStatus <= 599; post sample log lines AND the search link in thread",
+      "Group errors by proxyUpstreamName to identify the failing service (observed: core graphql server, edge controller)",
+      "Count the ABSOLUTE number of 5xx (observed incident with only 19 total 5xx - threshold alerts can fire on small counts in low-traffic envs)",
+      "Correlate timing with pod restarts/rollouts of the upstream service"
+    ],
+    "resolution_steps": [
+      "If correlated with pod restarts: monitor until success rate recovers; document 'likely due to pods restarting'; resolved when 5xx stops",
+      "If sustained: investigate the specific upstream (logs, resources), consider scaling it",
+      "Post log excerpts + search links; resolved"
+    ],
+    "gotchas": [
+      "Status 531 with multi-GB requestSize = oversized client payload, not a platform fault",
+      "504 with latency exactly at the timeout ceiling (e.g. 300.002s) = upstream timeout - points at a slow backend call, not the proxy",
+      "Sanitize before sharing: raw nginx log lines contain live Bearer tokens - never paste them outside the incident thread"
+    ],
+    "escalation": "Service owner of the failing upstream if sustained",
+    "example_commands": [
+      "log query: upstreamStatus >= 500 and upstreamStatus <= 599",
+      "kubectl get pods -n <ns> | grep <upstream> (check restart counts/ages)"
+    ]
+  },
+  {
+    "fingerprint": "KubePodsNotReady/*",
+    "alertname": "KubePodsNotReady / KubePodCrashLooping",
+    "alert_pattern": "[FIRING:N] <cluster> : KubePodsNotReady (often N in the tens; engine pods)",
+    "environment": "any aiWARE k8s cluster; usually engine pods",
+    "occurrences_observed": 5,
+    "typical_resolution_minutes": 60,
+    "diagnosis_steps": [
+      "List not-ready pods and bucket by state: kubectl get pods -n aiware | grep -vE 'Running|Completed' - states seen: ImagePullBackOff, CrashLoopBackOff, Error, Pending/Init",
+      "ImagePullBackOff: verify the image tag actually exists in the registry (docker manifest inspect <image>); also check engine BUILD state - builds not in 'Deployed' state have caused pulls of unavailable images",
+      "Pending with FailedScheduling: read the event - node taints observed (ToBeDeletedByClusterAutoscaler, uninitialized, network-unavailable) usually mean node churn in progress",
+      "Error/CrashLoop: grep pod logs for the failure signature: panic|fatal|context deadline|Throttl|OOM|connection refused",
+      "Common crash signature: engine toolkit 'Failed to start subprocess [/opt/runner] err=context deadline exceeded' = engine couldn't reach the edge controller at startup",
+      "Check node health for the affected pods (kubectl describe node - pressure conditions, Ready history)",
+      "Check whether an ongoing change (cluster upgrade, controller rollout, load test) explains it - link the change thread"
+    ],
+    "resolution_steps": [
+      "Bulk-delete pods stuck in Error so the controller recreates them (observed 3500+ Error pods deleted at once)",
+      "If new pods immediately re-enter Error with the same log signature, deleting is futile - the dependency (edge controller / registry) is the problem; fix that first",
+      "For engine builds not Deployed: deploy the builds, pods recover",
+      "For autoscaler taint churn: usually self-heals as nodes finish cycling; monitor",
+      "Confirm backlogs drain after pods recover; resolved"
+    ],
+    "gotchas": [
+      "FIRING count is inflated - 50 crashlooping pods is usually ONE root cause (one engine build, one dependency, one node event)",
+      "If controller pods were rolled after the incident window, the relevant logs are gone - note it and move on rather than guessing",
+      "Deleting Error pods without checking the crash signature just burns scheduler cycles when the root cause persists"
+    ],
+    "escalation": "Engine/platform team when the crash is inside engine code or builds need redeployment",
+    "example_commands": [
+      "kubectl get pods -n aiware --no-headers | grep eng | awk '{count[$3]++} END {for (s in count) print s, count[s]}'",
+      "kubectl logs <pod> -n aiware | grep -iE 'panic|fatal|context deadline|Throttl|OOM'",
+      "kubectl get events -n aiware --sort-by=.lastTimestamp | tail -30",
+      "docker manifest inspect <registry>/<image>:<tag>"
+    ]
+  },
+  {
+    "fingerprint": "SqsMessageAge-Wyvern/dmh-prod",
+    "alertname": "Wyvern - SQS Message Age",
+    "alert_pattern": "[FIRING:1] Wyvern - SQS Message Age DMH/DMH - prod pd (request queue, Seconds)",
+    "environment": "DMH prod (Wyvern request queue)",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": 15,
+    "diagnosis_steps": [
+      "Check queue depth/age trend - is it draining on its own?",
+      "Check with the app owner whether a known bulk workload is running (observed: customer re-runs / batch traffic explained the spike)",
+      "Check Wyvern ASG instance health/age"
+    ],
+    "resolution_steps": [
+      "Most occurrences: queue processes on its own within minutes - 'Queue processed. Alert resolved.'",
+      "If sustained: scale out the Wyvern ASG AND remove old/stale instances (both were needed in the sustained case); queue recovered after",
+      "Note: instance cycling during scale-out can briefly trigger a Processing Errors alert - expected, document it"
+    ],
+    "gotchas": [
+      "This alert flaps - it has re-fired minutes after resolving during bursts; check with the app owner before acting",
+      "Known-workload spikes (bulk re-processing) need no action, just a note in thread"
+    ],
+    "escalation": "App owner for load questions; infra for ASG scaling approval",
+    "example_commands": [
+      "aws sqs get-queue-attributes --queue-url <url> --attribute-names ApproximateNumberOfMessages ApproximateAgeOfOldestMessage"
+    ]
+  },
+  {
+    "fingerprint": "DiskSpaceUtilizationCritical-SQL/pandologic",
+    "alertname": "DiskSpaceUtilizationCritical (windows_exporter)",
+    "alert_pattern": "[FIRING:1] PandoLogic - SQL<NN> DiskSpaceUtilizationCritical (<IP>:9182 windows_exporter critical <drive>:)",
+    "environment": "PandoLogic MS SQL VMs (VMware)",
+    "occurrences_observed": 3,
+    "typical_resolution_minutes": 120,
+    "diagnosis_steps": [
+      "Identify server and drive letter from the alert (e.g. SQL41 R:, SQL43 I:)",
+      "Post current utilization % and absolute free GB in thread (e.g. '90%, 30GB free of 300GB')",
+      "This is a DB-owned system: notify/tag the DB owner before acting - NOC does not decide expansion alone"
+    ],
+    "resolution_steps": [
+      "Ask DB owner: cleanup or expand? (observed both: expand +100GB on approval; another case DB team cleaned up backup artifacts dropping 91.7% -> 50.7%)",
+      "If expansion approved: increase the disk, verify new utilization, post it",
+      "Resolved after utilization confirmed below threshold"
+    ],
+    "gotchas": [
+      "Recurring growth on the same drive has had an application root cause (backup artifacts, distribution DB growth) - the DB team investigates root cause in parallel; expansion is a stopgap",
+      "Response is slower than infra alerts because it waits on the DB owner - ack the incident to stop escalation"
+    ],
+    "escalation": "DB owner (required); their DB escalation rotation for the SQL servers",
+    "example_commands": []
+  },
+  {
+    "fingerprint": "TrackJob-Runscope/*",
+    "alertname": "Track Job (Runscope API monitor)",
+    "alert_pattern": "Incident: AWS US (us-1) - Track Job / AWS SLED (us-gov-1) - Track Job (monitoring_tool: Runscope)",
+    "environment": "synthetic API monitors per environment",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": 20,
+    "diagnosis_steps": [
+      "Check the failing assertion in the Runscope test result (observed: \"Status '500' was not a number equal to 200\")",
+      "Run/await the next test execution - transient 5xx often passes on the subsequent run",
+      "Run the equivalent manual test (submit a job / API call) to confirm the platform actually works"
+    ],
+    "resolution_steps": [
+      "Most occurrences: subsequent automated test passes AND manual test passes -> document 'Manual test passed', resolved",
+      "If the manual test also fails: treat as a real API incident - pivot to the ApiSuccessRate playbook (5xx log investigation)"
+    ],
+    "gotchas": [
+      "Single-run Runscope failures are noisy; two consecutive failures or a failing manual test is the real signal",
+      "The same alert on multiple envs simultaneously suggests a shared dependency, not coincidence"
+    ],
+    "escalation": "None for transient; API on-call for confirmed failures",
+    "example_commands": []
+  },
+  {
+    "fingerprint": "EngineBacklogCritical/*",
+    "alertname": "Engine backlog critical for 30m",
+    "alert_pattern": "[FIRING:1] <cluster> : Engine backlog critical for 30m",
+    "environment": "any aiWARE edge cluster",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": 90,
+    "diagnosis_steps": [
+      "Identify WHICH engine(s) have backlog and post engine name + ID + backlog size in thread",
+      "Pull recent task errors for that engine - error signatures observed: input asset 404 (bad jobs), unsupported input format sent by client, provider throttling (ProvisionedThroughputExceeded on cloud OCR), engine build too old for the input",
+      "Check pod health for that engine - if pods are fine, backlog is workload/task-level, not infra",
+      "Check for known causes: load testing in progress, bulk submissions, upstream change threads - link them",
+      "Identify the submitting org for bad-job floods (org ID from task records)"
+    ],
+    "resolution_steps": [
+      "Workload-explained (load test, bulk run): document the cause link, monitor drain, resolved",
+      "Bad input jobs (404 assets): confirm the asset URL actually 404s (HEAD request), then escalate to identify the submitter; engines are innocent",
+      "Provider throttling: backlog drains as retries succeed; flag quota increase to the cloud account owner",
+      "Engine-code failures: escalate to engine team (they may need to deploy newer builds); NOC cannot fix engine internals",
+      "'All pods running + backlog draining' cases: just monitor to completion"
+    ],
+    "gotchas": [
+      "Backlog alerts often accompany KubePodsNotReady on the same cluster - resolve pods first, backlog usually follows",
+      "A huge backlog of FAILING tasks (not slow ones) will not drain by waiting - an 'Engine failure rate above 15%' alert alongside means tasks are dying, not queued",
+      "Engineers outside NOC may only be able to diagnose, not fix (build deployments owned by another team) - set expectations in thread"
+    ],
+    "escalation": "Engine team for engine-internal failures; SRE for cluster-level causes; app owner for bad submissions",
+    "example_commands": [
+      "curl -I <asset-url> (verify 404 on bad-job inputs)"
+    ]
+  },
+  {
+    "fingerprint": "VmActiveRedAlarms/pandologic-vmware",
+    "alertname": "VM ActiveRedAlarms / ActiveYellowAlarms (vmware_vcenter)",
+    "alert_pattern": "[FIRING:1] PandoLogic - VM ActiveRedAlarms (triggeredAlarm:<VmCPU|VmMemory>UsageAlarm <cluster> <datacenter> <volume> ... critical)",
+    "environment": "PandoLogic VMware estate",
+    "occurrences_observed": 3,
+    "typical_resolution_minutes": 10,
+    "diagnosis_steps": [
+      "Read the triggeredAlarm field: which alarm (CPU/memory), which VM/host/volume",
+      "Check whether the alarm coincides with a scheduled job (nightly backups have appeared inside the alarm text: 'Last Backup successfully completed at ...')",
+      "Check current host CPU/memory on the VMware dashboard"
+    ],
+    "resolution_steps": [
+      "Backup/scheduled-job spikes: self-resolve; observed incidents auto-resolved within ~10 minutes (RESOLVED_BY: SYSTEM)",
+      "Sustained red alarms outside job windows: check the VM workload with the app owner"
+    ],
+    "gotchas": [
+      "These frequently auto-resolve - the incident record often shows SYSTEM resolved it before anyone acted; don't over-invest in the first 10 minutes",
+      "Yellow (warning) variants of the same alarms are informational; track only if they recur"
+    ],
+    "escalation": "VMware/app owner for sustained alarms",
+    "example_commands": []
+  }
+]

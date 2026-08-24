@@ -1,8 +1,9 @@
 node_modules/
 dist/
 .env
-node_modules/
-dist/
 .venv/
+.state/
+__pycache__/
+*.pyc
 *.zip
 *.png

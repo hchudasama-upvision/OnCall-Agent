@@ -1,0 +1,113 @@
+[
+  {
+    "fingerprint": "NFSConnectionCheckFailed/prod-edge",
+    "alertname": "NFSConnectionCheckFailed",
+    "environment": "prod-edge",
+    "occurrences": 4,
+    "median_resolution_minutes": 35,
+    "diagnosis_steps": [
+      "Map the alert IP to NFS shard number and cloud instance ID",
+      "Check instance reachability status in cloud console (often 'Instance reachability check failed')",
+      "Test the NFS port directly: nc -w 10 -v <ip> 2049",
+      "If SSH works: systemctl status nfs-server && systemctl status edge-agent",
+      "Check nfsd kernel threads: grep ^th /proc/net/rpc/nfsd (default 80 is often too low)",
+      "Check for processes stuck in uninterruptible sleep: ps -eo state,pid,cmd | grep '^D' (many D-state nfsd processes = hung NFS, load average will be very high)"
+    ],
+    "resolution_steps": [
+      "If instance reachability failed OR many D-state processes: reboot the instance (service restart will NOT recover a hung NFS - learned from experience)",
+      "After boot: verify nfs-server and edge-agent services are active",
+      "Bump nfsd threads: rpc.nfsd 128",
+      "Verify: nc -w 3 -v <ip> 2049 succeeds",
+      "Post command outputs in thread, mark alert resolved"
+    ],
+    "gotchas": [
+      "Restarting nfs-server.service does not fix hung nfsd processes in D state; only a reboot clears them",
+      "Alert may re-fire within an hour if root cause is network-level; monitor load after reboot",
+      "If /etc/exports fails to read or /opt/<datadir>/nfs is missing, the data volume may not have mounted at boot - check lsblk and remount before starting nfs-server"
+    ],
+    "example_commands": [
+      "nc -w 10 -v <IP> 2049",
+      "systemctl status nfs-server && systemctl status edge-agent",
+      "grep ^th /proc/net/rpc/nfsd",
+      "rpc.nfsd 128",
+      "ps -eo state,pid,cmd | grep '^D' | wc -l"
+    ]
+  },
+  {
+    "fingerprint": "KubePersistentVolumeFillingUp/prod",
+    "alertname": "KubePersistentVolumeFillingUp",
+    "environment": "prod",
+    "occurrences": 6,
+    "median_resolution_minutes": 25,
+    "diagnosis_steps": [
+      "Identify PVC name and namespace from alert labels",
+      "Check current usage percent and capacity: kubectl get pvc -n <ns>",
+      "Check fill trend on the storage dashboard - is it steady growth or a spike from a running job?",
+      "Verify the StorageClass allows expansion: kubectl get sc <class> -o jsonpath='{.allowVolumeExpansion}'",
+      "Check resize history - a PVC resized repeatedly indicates a leak, escalate to app owner instead"
+    ],
+    "resolution_steps": [
+      "Patch PVC to add ~20-25% capacity: kubectl patch pvc <name> -n <ns> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"<new>Gi\"}}}}'",
+      "Watch for FileSystemResizePending condition; some volume types need a pod restart to grow the filesystem",
+      "Verify free space recovered (target: back above 25-30% free)",
+      "Post before/after dashboard screenshots in thread"
+    ],
+    "gotchas": [
+      "PVCs can only grow, never shrink",
+      "Scratch-storage PVCs for transcode workloads fill during large jobs and may self-recover; check whether the writing job is about to finish before resizing"
+    ],
+    "example_commands": [
+      "kubectl get pvc <name> -n <ns>",
+      "kubectl patch pvc <name> -n <ns> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"250Gi\"}}}}'",
+      "kubectl get events -n <ns> --field-selector involvedObject.name=<name>"
+    ]
+  },
+  {
+    "fingerprint": "AlbUnhealthyHostCritical/prod",
+    "alertname": "AlbUnhealthyHostCritical",
+    "environment": "prod",
+    "occurrences": 3,
+    "median_resolution_minutes": 10,
+    "diagnosis_steps": [
+      "Identify the target group from alert labels (commonly the haproxy/api target groups)",
+      "Check whether the unhealthy target is a newly launched instance still warming up",
+      "Check target health reason codes in the load balancer console/API"
+    ],
+    "resolution_steps": [
+      "If newly launched instance: wait and re-check within 10 minutes - usually passes health checks after warm-up",
+      "If still unhealthy: check instance system logs and the service on the failing port",
+      "Post before/after target-health screenshots in thread"
+    ],
+    "gotchas": [
+      "Most occurrences self-resolve as new autoscaled instances finish warming up; avoid acting in the first 5-10 minutes"
+    ],
+    "example_commands": [
+      "aws elbv2 describe-target-health --target-group-arn <arn>"
+    ]
+  },
+  {
+    "fingerprint": "ApiSuccessRate/prod",
+    "alertname": "API Success Rate - nginx",
+    "environment": "prod",
+    "occurrences": 5,
+    "median_resolution_minutes": 40,
+    "diagnosis_steps": [
+      "Query logs for upstream 5xx: filter upstreamStatus >= 500 AND <= 599 over the alert window",
+      "Group by proxyUpstreamName to find which service is failing (graphql-server, edge-controller, etc.)",
+      "Check whether pods for that service restarted or were rescheduled at the same time",
+      "Count total 5xx - a handful during a deploy/restart differs from a sustained failure"
+    ],
+    "resolution_steps": [
+      "If correlated with pod restarts: monitor until success rate recovers, document the restart cause",
+      "If sustained: check upstream pod logs and resource saturation; consider scaling the affected service",
+      "Post log samples and the log-search link in thread"
+    ],
+    "gotchas": [
+      "Status 531 with huge requestSize values usually indicates oversized client payloads, not a platform fault",
+      "Success-rate alerts in low-traffic regions can fire on a tiny absolute number of errors - always check the absolute 5xx count"
+    ],
+    "example_commands": [
+      "logs query: upstreamStatus >= 500 and upstreamStatus <= 599"
+    ]
+  }
+]

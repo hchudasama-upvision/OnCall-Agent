@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -31,3 +31,43 @@ class EdgeUiTaskEvidence:
     error_log_lines: List[str]
     sample_task_id: str
     sample_job_id: str
+
+
+@dataclass
+class ParsedAlert:
+    """One message from #alerts-devops, normalized.
+
+    Source classification follows DESIGN.md §1.1 (five posting sources) and
+    the v1.1 scope refinement: only VictorOps *incidents* are triggers. Raw
+    Alertmanager / PandoLogic / Jenkins posts are kept as correlation
+    context and never start an investigation on their own — that is what
+    `is_trigger` encodes.
+    """
+
+    source: str                     # victorops | alertmanager | pandologic | jenkins | oncall_rotation | unknown
+    kind: str                       # incident | incident_update | warning | report | rotation | unknown
+    raw_text: str
+    channel_id: str = ""
+    message_ts: str = ""
+    permalink: str = ""
+    incident_number: int = 0
+    incident_name: str = ""
+    entity_display_name: str = ""
+    monitoring_tool: str = ""
+    state_message: str = ""
+    escalation_policy: str = ""
+    alert_name: str = ""            # the Alertmanager alertname, e.g. "KubePodCrashLooping"
+    environment_key: str = ""       # the "aiw-xxx" token, when the alert carries one
+    firing_count: int = 0
+    fields: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def is_trigger(self) -> bool:
+        return self.source == "victorops" and self.kind == "incident"
+
+    @property
+    def fingerprint(self) -> str:
+        """(alert name, env, entity) collapsed to one string, for dedup/suppression."""
+        parts = [p for p in (self.alert_name or self.incident_name, self.environment_key,
+                             self.entity_display_name) if p]
+        return "|".join(parts).lower()

@@ -28,40 +28,54 @@ Hard guardrails (never delegated to the model):
 
 ALLOWED_EVIDENCE_KEYS = {"screenshot_tasks", "screenshot_engine", "task_log", "job_log"}
 
-_DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "should_post": {"type": "boolean"},
-        "reasoning": {
-            "type": "string",
-            "description": "Internal reasoning for the decision — never posted to Slack, audit-log only.",
-        },
-        "root_cause_narrative": {
-            "type": "string",
-            "description": "Plain-language root-cause explanation, or empty string if not yet determinable from the evidence given.",
-        },
-        "owning_team_mention": {
-            "type": "string",
-            "description": "e.g. '@engines-team' — must be grounded in the error type/past resolutions, not guessed. Empty string if unclear.",
-        },
-        "posts": {
-            "type": "array",
-            "description": "Ordered list of Slack thread replies to post, in order.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                    "evidence_keys": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": sorted(ALLOWED_EVIDENCE_KEYS)},
+# Descriptions for the four evidence files the Edge UI pipeline always
+# produces. Callers that gather MORE evidence (e.g. rendered Grafana panels,
+# whose keys are not knowable at import time) pass extra_evidence_keys +
+# extra_evidence_descriptions; with neither, everything below behaves exactly
+# as it did before that option existed.
+_EVIDENCE_DESCRIPTIONS = {
+    "screenshot_tasks": "Edge UI Tasks page, filtered to this engine + window",
+    "screenshot_engine": "Edge UI Engine page, filtered to this engine + window",
+    "task_log": "downloaded task log .zip",
+    "job_log": "downloaded job log .zip",
+}
+
+
+def _decision_schema(allowed_keys):
+    return {
+        "type": "object",
+        "properties": {
+            "should_post": {"type": "boolean"},
+            "reasoning": {
+                "type": "string",
+                "description": "Internal reasoning for the decision — never posted to Slack, audit-log only.",
+            },
+            "root_cause_narrative": {
+                "type": "string",
+                "description": "Plain-language root-cause explanation, or empty string if not yet determinable from the evidence given.",
+            },
+            "owning_team_mention": {
+                "type": "string",
+                "description": "e.g. '@engines-team' — must be grounded in the error type/past resolutions, not guessed. Empty string if unclear.",
+            },
+            "posts": {
+                "type": "array",
+                "description": "Ordered list of Slack thread replies to post, in order.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "evidence_keys": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": sorted(allowed_keys)},
+                        },
                     },
+                    "required": ["text", "evidence_keys"],
                 },
-                "required": ["text", "evidence_keys"],
             },
         },
-    },
-    "required": ["should_post", "reasoning", "posts", "root_cause_narrative", "owning_team_mention"],
-}
+        "required": ["should_post", "reasoning", "posts", "root_cause_narrative", "owning_team_mention"],
+    }
 
 
 @dataclass
@@ -100,12 +114,18 @@ def _build_prompt(
     history: HistoryFetchResult,
     available_evidence_keys: List[str],
     tdo_id: Optional[str],
+    evidence_descriptions: Optional[Dict[str, str]] = None,
 ) -> str:
     permalink_note = (
         f'The incident DOES have a real Slack permalink: {incident.slack_permalink} — you may reference '
         f'"Incident #{incident.incident_number}" as linked text if you want, but must not alter the URL.'
         if incident.slack_permalink
         else "The incident has NO Slack permalink available — never invent one; refer to it as plain text only."
+    )
+
+    descriptions = {**_EVIDENCE_DESCRIPTIONS, **(evidence_descriptions or {})}
+    evidence_menu = "\n".join(
+        f"  - {key}: {descriptions.get(key, 'evidence file')}" for key in available_evidence_keys
     )
 
     return f"""You are deciding how to handle a real VictorOps engine-failure alert for the NOC team, replacing what used to be a hardcoded template. You must replicate the structure and tone of how this NOC team has actually handled engine-failure incidents before (see past resolutions below), while being strictly grounded in the real evidence given — never invent facts, numbers, URLs, or Slack mentions not present here.
@@ -126,10 +146,7 @@ EVIDENCE (real, gathered from Edge UI — the only facts you may state)
 
 EVIDENCE FILES AVAILABLE TO ATTACH (reference ONLY these keys in evidence_keys, never invent others)
   {available_evidence_keys}
-  - screenshot_tasks: Edge UI Tasks page, filtered to this engine + window
-  - screenshot_engine: Edge UI Engine page, filtered to this engine + window
-  - task_log: downloaded task log .zip
-  - job_log: downloaded job log .zip
+{evidence_menu}
 
 PAST #comms-noc RESOLUTIONS OF SIMILAR ENGINE-FAILURE INCIDENTS (ground your structure/tone/team-routing in these; do not copy numbers from them into THIS incident)
 {_format_history(history)}
@@ -152,8 +169,13 @@ def decide_resolution(
     tdo_id: Optional[str],
     claude_binary: str = "claude",
     timeout_seconds: int = 120,
+    extra_evidence_keys: Optional[List[str]] = None,
+    extra_evidence_descriptions: Optional[Dict[str, str]] = None,
 ) -> Decision:
-    prompt = _build_prompt(incident, evidence, history, available_evidence_keys, tdo_id)
+    allowed_keys = ALLOWED_EVIDENCE_KEYS | set(extra_evidence_keys or [])
+    prompt = _build_prompt(
+        incident, evidence, history, available_evidence_keys, tdo_id, extra_evidence_descriptions
+    )
 
     result = subprocess.run(
         [
@@ -164,7 +186,7 @@ def decide_resolution(
             "--tools",
             "",
             "--json-schema",
-            json.dumps(_DECISION_SCHEMA),
+            json.dumps(_decision_schema(allowed_keys)),
             prompt,
         ],
         capture_output=True,
@@ -182,14 +204,17 @@ def decide_resolution(
     if output is None:
         raise RuntimeError(f"claude CLI did not return structured_output: {result.stdout[:500]}")
 
-    return _validate_and_parse(output, incident)
+    return _validate_and_parse(output, incident, allowed_keys)
 
 
-def _validate_and_parse(output: dict, incident: VictorOpsIncident) -> Decision:
+def _validate_and_parse(
+    output: dict, incident: VictorOpsIncident, allowed_keys: Optional[set] = None
+) -> Decision:
+    allowed_keys = ALLOWED_EVIDENCE_KEYS if allowed_keys is None else allowed_keys
     posts: List[PlannedPost] = []
     for raw_post in output.get("posts", []):
         keys = raw_post.get("evidence_keys", [])
-        bad_keys = [k for k in keys if k not in ALLOWED_EVIDENCE_KEYS]
+        bad_keys = [k for k in keys if k not in allowed_keys]
         if bad_keys:
             raise RuntimeError(f"Decision referenced unknown evidence keys {bad_keys} — refusing to post")
         posts.append(PlannedPost(text=raw_post["text"], evidence_keys=keys))

@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Known-chronic alert fingerprints the agent must NOT investigate per fire.",
+    "DESIGN.md section 1.5 item 1: aiw-stg198 KubePodCrashLooping has fired every",
+    "~5 minutes at FIRING:45+ continuously since at least July, never acked, never",
+    "actioned. Any automation that treats each fire as an incident drowns.",
+    "",
+    "Each entry is a case-insensitive regex matched against ParsedAlert.fingerprint",
+    "('<alert name>|<env>|<entity>', lowercased). Suppressed alerts are still",
+    "logged and still counted as correlation context - they just never open a",
+    "thread. Review this list weekly; a suppression is a deferred fix, not a fix.",
+    "",
+    "Example: \"kubepodcrashlooping\\\\|aiw-stg198\""
+  ],
+  "suppressed_fingerprints": []
+}

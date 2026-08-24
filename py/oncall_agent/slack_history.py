@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -76,4 +77,68 @@ def fetch_relevant_comms_noc_history(
             HistoricalThread(permalink=permalink, top_level_text=msg["text"], reply_texts=reply_texts)
         )
 
+    return HistoryFetchResult(threads=threads, unavailable_reason=None)
+
+
+ALERTS_DEVOPS_CHANNEL_ID = "C909ZH4ET"
+
+
+def resolve_channel_id(client: WebClient, name_or_id: str) -> str:
+    """Accept either a channel id (C…/G…) or a bare name and return the id.
+
+    .env already stores SLACK_CHANNEL as a raw id, while humans write the
+    channel by name — supporting both keeps either style working. Names are
+    resolved by paging conversations.list, which needs channels:read /
+    groups:read; an id passes straight through and needs nothing.
+    """
+    value = (name_or_id or "").lstrip("#").strip()
+    if not value:
+        raise RuntimeError("No channel configured")
+    if re.fullmatch(r"[CGD][A-Z0-9]{6,}", value):
+        return value
+
+    cursor = None
+    while True:
+        res = client.conversations_list(
+            limit=200, cursor=cursor, exclude_archived=True,
+            types="public_channel,private_channel",
+        )
+        for channel in res.get("channels", []):
+            if channel.get("name") == value:
+                return channel["id"]
+        cursor = (res.get("response_metadata") or {}).get("next_cursor")
+        if not cursor:
+            break
+    raise RuntimeError(
+        f"Channel #{value} is not visible to the bot. Invite the app to it, or put "
+        f"the channel ID in .env instead of the name (ids need no channels:read scope)."
+    )
+
+
+def fetch_channel_context(
+    client: WebClient,
+    channel_id: str,
+    limit: int = 50,
+    oldest: Optional[str] = None,
+) -> HistoryFetchResult:
+    """Recent top-level messages of a channel, as correlation context.
+
+    Used for #alerts-devops: per DESIGN.md §1.5 the same real-world condition
+    arrives two or three times (local + central Alertmanager, plus the
+    VictorOps mirror), so what else was firing around an incident is real
+    diagnostic signal. Read-only, and degrades to an empty result with a
+    reason rather than raising — historical grounding is a bonus, not a
+    prerequisite for investigating.
+    """
+    try:
+        history = client.conversations_history(channel=channel_id, limit=limit, oldest=oldest)
+    except SlackApiError as e:
+        reason = e.response.get("error", str(e))
+        return HistoryFetchResult(threads=[], unavailable_reason=f"conversations.history failed: {reason}")
+
+    threads = [
+        HistoricalThread(permalink="", top_level_text=m["text"], reply_texts=[])
+        for m in history.get("messages", [])
+        if m.get("text")
+    ]
     return HistoryFetchResult(threads=threads, unavailable_reason=None)

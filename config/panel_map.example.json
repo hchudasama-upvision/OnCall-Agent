@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Shape reference only — these uids/ids are from the noc-ai-lab prototype's",
+    "local TestData dashboard, NOT from thanos-grafana. Copy the SHAPE, discover",
+    "the real ids with `python -m oncall_agent.grafana --list-panels <uid>`."
+  ],
+  "dashboard_uid": "noc-ai-lab",
+  "default_from": "now-6h",
+  "panels_by_alertname": {
+    "NFSConnectionCheckFailed": [2, 3, 4, 5, 6],
+    "KubePersistentVolumeFillingUp": [8, 9, 10],
+    "AlbUnhealthyHostCritical": [12],
+    "API Success Rate - nginx": [13, 12],
+    "Wyvern - SQS Message Age": [14, 15],
+    "Engine backlog critical for 30m": [15, 14],
+    "KubePodsNotReady / KubePodCrashLooping": [15, 8],
+    "VM ActiveRedAlarms / ActiveYellowAlarms (vmware_vcenter)": [16],
+    "DiskSpaceUtilizationCritical (windows_exporter)": [17],
+    "Track Job (Runscope API monitor)": [13],
+
+    "Engine failure rate above 15%": {
+      "dashboard_uid": "some-other-dashboard-uid",
+      "panels": [4, 7],
+      "from": "now-3h",
+      "variables": { "var-cluster": "{env}" }
+    }
+  }
+}

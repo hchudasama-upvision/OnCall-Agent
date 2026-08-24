@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "alert fingerprint -> Grafana panels to attach as visual evidence in the",
+    "#comms-noc incident thread (DESIGN.md section 4.5).",
+    "",
+    "Only VERIFIED entries belong here. A wrong panel id renders a real-looking",
+    "picture of the wrong graph, which is worse than no evidence. Discover and",
+    "confirm ids against thanos-grafana.ops.veritone.com before adding one:",
+    "",
+    "  python -m oncall_agent.grafana --list-dashboards engine",
+    "  python -m oncall_agent.grafana --list-panels <dashboard_uid>",
+    "",
+    "Lookup key: the alert's own alertname first, then the case-library",
+    "fingerprint. Keys are matched the way the alert reads in Slack, so a",
+    "compound key ('KubePodsNotReady / KubePodCrashLooping') also matches each",
+    "half on its own. {env} in a variable value is replaced with the alert's",
+    "aiw-xxx environment key.",
+    "",
+    "See config/panel_map.example.json for both accepted entry shapes.",
+    "",
+    "STILL UNMAPPED (deliberately): Kube*, NSQ/backlog, PandoLogic and Runscope",
+    "alert types. thanos-grafana carries many near-identical per-cluster copies",
+    "of those dashboards and picking the right one is a judgment call for whoever",
+    "knows which cluster each alert refers to - not something to guess."
+  ],
+  "dashboard_uid": null,
+  "default_from": "now-6h",
+  "panels_by_alertname": {
+    "Engine failure rate above 15%": {
+      "_verified": "2026-08-24 — dashboard 'aiWARE Engine task failure rate 2'; its $env variable takes exactly the aiw-xxx keys this repo uses, so {env} substitution lands on the right cluster.",
+      "dashboard_uid": "f187d260-e494-4f91-9970-db27a161f033",
+      "panels": [1, 2, 4],
+      "from": "now-3h",
+      "variables": { "var-env": "{env}" }
+    }
+  }
+}
