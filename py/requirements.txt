@@ -1,0 +1,4 @@
+playwright
+slack_sdk
+python-dotenv
+requests

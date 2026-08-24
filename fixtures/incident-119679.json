@@ -1,0 +1,12 @@
+{
+  "incidentNumber": 119679,
+  "organization": "wazee-digital-inc",
+  "incidentName": "[FIRING:1] aiw-wpsc01 : Engine failure rate 100% for all engine in every Environment",
+  "entityDisplayName": "[FIRING:1] aiw-wpsc01 : Engine failure rate 100% for all engine in every Environment",
+  "monitoringTool": "Alertmanager",
+  "stateMessage": "*Summary:* aiw-wpsc01 - Engine: Docling Chunk Engine has failure rate 100% over the last 6 hours.\n*Description:* Environment: aiw-wpsc01 has...",
+  "escalationPolicy": "NOC-VT OnCall",
+  "ackedBy": "khushpatel",
+  "slackPermalink": "https://wazee-digital-inc.slack.com/archives/C909ZH4ET/p0000000000119679",
+  "createdAt": "2026-08-21T13:11:00Z"
+}
