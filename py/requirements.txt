@@ -1,0 +1,19 @@
+# Core (always needed)
+slack_sdk
+python-dotenv
+requests
+
+# Edge UI evidence: task/engine screenshots and log downloads, and the
+# headless-browser fallback for Grafana panels when the server has no
+# image-renderer plugin. After pip install, also run:
+#   playwright install chromium && playwright install-deps
+playwright
+
+# Socket Mode listener (real-time + interactive buttons). Optional: without
+# an app-level token the listener polls conversations.history instead, and
+# this import is never reached.
+slack-bolt
+
+# Only for LLM_PROVIDER=anthropic. The default provider (claude_cli) shells
+# out to the Claude Code CLI and needs no SDK.
+# anthropic

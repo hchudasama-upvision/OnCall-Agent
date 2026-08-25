@@ -1,0 +1,8 @@
+slack_sdk
+python-dotenv
+requests
+playwright
+slack-bolt
+
+[anthropic]
+anthropic

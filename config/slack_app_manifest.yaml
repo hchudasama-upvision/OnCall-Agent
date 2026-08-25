@@ -1,0 +1,55 @@
+# Slack app manifest for the on-call agent.
+#
+# Paste at https://api.slack.com/apps -> Create New App -> From a manifest.
+#
+# IF YOU ALREADY HAVE A TOKEN AND READS FAIL WITH missing_scope:
+#   a token's scopes are fixed when the app is INSTALLED. Adding scopes to the
+#   manifest does nothing to tokens already issued. Go to Install App ->
+#   Reinstall to Workspace and copy the NEW Bot User OAuth Token. This is the
+#   most likely fix — the inherited token carried only chat:write + files:write
+#   while the manifest it came from already declared everything below.
+#
+# THEN:
+#   1. Basic Information -> App-Level Tokens -> generate one with scope
+#      "connections:write"  -> SLACK_APP_TOKEN (xapp-...). Optional: it turns
+#      polling into real-time Socket Mode and enables the Approve/Deny buttons.
+#   2. Install App -> copy the Bot User OAuth Token -> SLACK_BOT_TOKEN (xoxb-...)
+#   3. Invite the bot to BOTH channels: /invite @NOC OnCall Agent
+#
+# A token only ever sees the workspace it was installed into. For production
+# against Veritone's #alerts-devops and #comms-noc, this app has to be
+# installed in the Veritone workspace — a test-workspace token cannot reach it.
+#
+# Derived from the noc-ai-lab prototype manifest, minus reactions:write (the
+# agent does not react to messages) and plus a note on why each scope is here.
+
+display_information:
+  name: NOC OnCall Agent
+  description: Investigates VictorOps incidents and posts evidence to the incident thread
+  background_color: "#1a1a2e"
+
+features:
+  bot_user:
+    display_name: NOC OnCall Agent
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - channels:history    # read #alerts-devops — REQUIRED, the listener cannot run without it
+      - channels:read       # resolve channel names to ids (skip if you configure ids directly)
+      - groups:history      # only if either channel is private
+      - groups:read         # only if either channel is private
+      - chat:write          # post the incident thread
+      - files:write         # attach Grafana panels, Edge UI screenshots, log zips
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+  interactivity:
+    is_enabled: true        # needed for the Approve/Deny buttons in Socket Mode
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false

@@ -1,0 +1,163 @@
+{
+  "_README": [
+    "TEMPLATE + WORKED DRAFT for data/cases.json — the case library the agent",
+    "grounds its triage in. Copy an entry into data/cases.json once it is correct.",
+    "",
+    "SCHEMA CHANGES vs the noc-ai-lab library (all additive; old cases still load):",
+    "  escalate_to           replaces free-prose `escalation` with real Slack IDs and",
+    "                        ticket refs. The agent can only @mention what it is given;",
+    "                        prose like 'the edge platform team' is unmentionable, which",
+    "                        is why real runs keep ending in 'someone confirm the handle'.",
+    "  discriminating_check  the single test that separates KNOWN from NEW. This is the",
+    "                        highest-value field in the whole file — see the engine",
+    "                        failure draft below. Without it the agent re-derives a",
+    "                        diagnosis every time for a condition the team already knows.",
+    "  known_issues          open tickets this alert is currently explained by, each with",
+    "                        the condition under which that explanation applies.",
+    "  auto_resolves         does it clear on its own, and how fast? Drives whether the",
+    "                        agent should open a thread at all.",
+    "  evidence_to_post      what a human actually attaches. Tells the agent which",
+    "                        deterministic evidence matters for THIS alert type — e.g.",
+    "                        engine failure is Edge UI, not Grafana.",
+    "",
+    "DO NOT SANITIZE. The noc-ai-lab library used <IP>/<cluster>/<instance-id>",
+    "placeholders because it was a pre-approval shadow project on a personal Slack.",
+    "This repo already holds production Edge tokens and reads the real channels, so a",
+    "placeholder is pure loss: '<IP>' cannot be run, compared, or escalated on.",
+    "",
+    "WHAT MAKES A CASE GOOD: the gotchas. 'reboot, don't restart nfs-server — D-state",
+    "processes never clear' is worth more than ten diagnosis steps, because it is the",
+    "thing no runbook says and every engineer learns the hard way."
+  ],
+
+  "_PRIORITY": [
+    "Ranked by (how often it fires) x (how badly the agent handles it today).",
+    "",
+    "1. Engine failure rate above 15%   MOST FREQUENT VictorOps incident, fully",
+    "   automated by this repo, and COMPLETELY ABSENT from the library. Draft below.",
+    "2. KubePodNotReady                 fires on prod1001; only KubePodsNotReady covered",
+    "3. AlbUnhealthyHostWarning         the Warning tier; only Critical covered",
+    "4. SQL41 DiskSpaceUtilizationWarning + SQL Server High_XTP_Controller_DLC_Fetch_Latency",
+    "   PandoLogic; only the Critical disk case is covered",
+    "5. Standard Apps Smoke Test UNSTABLE   Jenkins, 2-hourly",
+    "6. Docusign Platform / other synthetic 'X Platform' probes",
+    "",
+    "Also worth deepening: AlbUnhealthyHostCritical, KubePersistentVolumeFillingUp,",
+    "VM ActiveRedAlarms and DiskSpaceUtilizationCritical are all thin (2-3 steps, 1",
+    "observed occurrence, no example_commands on some)."
+  ],
+
+  "cases": [
+    {
+      "_STATUS": "DRAFT — assembled by reading real #comms-noc threads on 2026-08-24. NOT verified by a human. Correct it, then move it into data/cases.json. Nothing here should be trusted until you have.",
+      "_SOURCES": [
+        "1787148500.858899 — Shital Patel, 19 Aug: VE-23618 core partitioning explanation",
+        "1786870010.395799 / 1786855671.436159 — Viral Prajapati + Quynh Dang, 16 Aug: Output Writer, ETGN036, deleted core jobs",
+        "1786950829.887819 — Minh Hoang, 17 Aug: VE-26846 WideOrbit Traffic",
+        "1787568742.149179 — Shital Patel, 24 Aug: VE-26837 SI2 Playback, revert not deployed to prd5001",
+        "live pipeline run, 24 Aug: SI2 Playback bad_data.ETGN013 / ffmpeg exit 234"
+      ],
+
+      "fingerprint": "EngineFailureRate/aiw-*",
+      "alertname": "Engine failure rate above 15%",
+      "alert_pattern": "[FIRING:1] aiw-prd5001 : Engine failure rate above 15%",
+      "environment": "all aiWARE clusters; observed on aiw-prd5001, aiw-prod1001, aiw-dmh1001",
+      "occurrences_observed": 12,
+      "typical_resolution_minutes": 0,
+
+      "auto_resolves": "Almost always. RESOLVED_BY: SYSTEM, usually within ~35 min. On prd5001 it pages roughly every 2 hours around the clock — every one ACKed and auto-resolved with no action possible (Shital Patel, 24 Aug).",
+
+      "discriminating_check": "Pull the failed tasks in Edge UI and read their CREATION DATES. Old dates (the same stuck batch) = known, no action. Recent dates = something new, investigate properly. Shital Patel stated this explicitly on 19 Aug: '1,872 tasks across prod1001/dmh1001/prd5001 (all created 14-16 Aug) are stuck retrying, so this will keep re-firing until they're cleared - if a future alert has *recent* task dates instead, that's something new and worth investigating.'",
+
+      "known_issues": [
+        {
+          "ticket": "https://veritone.atlassian.net/browse/VE-23618",
+          "applies_when": "Error Type is `unknown` and the engine is Output Writer",
+          "summary": "Core writes some jobs/tasks to the parent table instead of the weekly partition, so Output Writer cannot upload results and tasks fail with error type `unknown`.",
+          "owner_slack_id": "U031E6JJPFU",
+          "owner_name": "Shuwei Lin"
+        },
+        {
+          "ticket": "https://veritone.atlassian.net/browse/VE-26841",
+          "applies_when": "Output Writer reports `unknown` rather than a real error",
+          "summary": "Output Writer should fail fast on not_found from Core GraphQL uploadEngineResult instead of reprocessing into an unknown failure.",
+          "owner_slack_id": "",
+          "owner_name": ""
+        },
+        {
+          "ticket": "https://veritone.atlassian.net/browse/VE-26846",
+          "applies_when": "Engine is WideOrbit Traffic",
+          "summary": "69 stations fail 100% on WideOrbit status-poll timeout.",
+          "owner_slack_id": "",
+          "owner_name": ""
+        },
+        {
+          "ticket": "https://veritone.atlassian.net/browse/VE-26837",
+          "applies_when": "Engine is SI2 Playback segment creator on aiw-prd5001",
+          "summary": "Introduced by PR #10693; revert merged as PR #10709 (2470d8ae0) but NOT yet deployed to prd5001. Needs realtime/v3.80.4.7386 or later — 3.80.4.7385 still has the bug, so the check is >= 72386.",
+          "owner_slack_id": "U0AAJNGJG5U",
+          "owner_name": "Amit Sainani (rollout)"
+        }
+      ],
+
+      "diagnosis_steps": [
+        "Edge UI -> Processing -> Tasks, filter to the engine and the alert's window. Record total / completed / failed and the percentages.",
+        "Identify the failing engine by name AND id; post both.",
+        "Open a failed task's detail for the error TYPE (unknown / bad_data / internal_error) and the raw failureDetail.",
+        "Record the affected org id and the TDO.",
+        "Check the failed tasks' creation dates — see discriminating_check.",
+        "Download the task and job logs and attach them."
+      ],
+
+      "resolution_steps": [
+        "There is usually nothing for the NOC to fix — the fix is a code change or a deploy owned by another team.",
+        "Match the error type against known_issues and name the ticket in the thread.",
+        "If it matches a known issue with the stuck-batch signature, say so and let it auto-resolve.",
+        "If task dates are recent or the error type is new, escalate with engine id, org, TDO, error type and logs."
+      ],
+
+      "gotchas": [
+        "The percentage in the alert and the percentage you capture will often disagree, because the alert evaluated its own window and you are looking at now. Say which window you measured; do not silently reconcile them.",
+        "`bad_data` points at the source media for that TDO, not at the engine host — do not escalate it as an infra problem.",
+        "Error Type `unknown` is the VE-23618 signature, not an absence of information.",
+        "This alert pages ~12x/day on prd5001 alone. Every fire is ACKed and auto-resolves. Do not treat a fresh page as evidence of a fresh problem.",
+        "A revert being merged does NOT mean it is deployed to the affected cluster — check the running version (VE-26837 was merged and still firing days later)."
+      ],
+
+      "evidence_to_post": [
+        "Edge UI Tasks page, filtered to engine + window (screenshot)",
+        "Edge UI Engine page, same filter (screenshot)",
+        "task log .zip",
+        "job log .zip",
+        "NOT Grafana — this is an Edge UI investigation"
+      ],
+
+      "escalate_to": [
+        {
+          "when": "Error type `unknown`, Output Writer, old task dates",
+          "slack_id": "U031E6JJPFU",
+          "name": "Shuwei Lin",
+          "why": "VE-23618 owner"
+        },
+        {
+          "when": "SI2 Playback on prd5001, deploy/rollout question",
+          "slack_id": "U0AAJNGJG5U",
+          "name": "Amit Sainani",
+          "why": "asked directly about the prd5001 rollout plan for the VE-26837 revert"
+        },
+        {
+          "when": "Unknown error type, or recent task dates (genuinely new)",
+          "slack_id": "",
+          "name": "TODO — who owns triage for a new engine failure?",
+          "why": "the agent currently ends with 'someone confirm the handle', which is the gap this field closes"
+        }
+      ],
+
+      "example_commands": [
+        "Edge UI: /processing/tasks/ then filter engine + window",
+        "Edge API: GET {base}/edge/v1/proc/tasks/stats/engines?startTime=&endTime=",
+        "Edge API: GET {base}/edge/v1/proc/task/{taskId}/detail"
+      ]
+    }
+  ]
+}

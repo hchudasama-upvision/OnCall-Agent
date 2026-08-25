@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "Known-chronic or unwanted alert fingerprints the agent must NOT investigate.",
+    "Each entry is a case-insensitive regex matched against ParsedAlert.fingerprint",
+    "('<alert name>|<env>|<entity>', lowercased). Suppressed alerts are still logged",
+    "and still count as correlation context - they just never open a thread.",
+    "",
+    "noc health check  - the NOC-AUTOMATION script's own 2-hourly status page",
+    "                    routed through VictorOps. The NOC does not want the agent",
+    "                    triaging its own monitoring bot (owner's call, 2026-08-24).",
+    "",
+    "DESIGN.md section 1.5 item 1 lists the other standing candidate:",
+    "aiw-stg198 KubePodCrashLooping has fired every ~5 minutes at FIRING:45+ since",
+    "at least July, never acked, never actioned. Add \"kubepodcrashlooping\\\\|aiw-stg198\"",
+    "if raw Alertmanager posts are ever made triggers (TRIGGER_ON=all).",
+    "",
+    "Review weekly; a suppression is a deferred fix, not a fix."
+  ],
+  "suppressed_fingerprints": [
+    "noc health check"
+  ]
+}
