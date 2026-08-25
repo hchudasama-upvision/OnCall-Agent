@@ -1,0 +1,113 @@
+{
+  "_comment": [
+    "Real #alerts-devops (C909ZH4ET) messages, captured 2026-08-24. These are the",
+    "regression fixtures for alert_parser.py \u2014 every one of them broke the parser",
+    "that had been written against guessed formats.",
+    "",
+    "What real cards do that guessed ones did not:",
+    "  - INCIDENT_NAME is the incident NUMBER ('119881'), not the title.",
+    "  - The title lives in the attachment's linked heading, after '|Incident #N>: '.",
+    "  - metadata keys inside the ``` fence are lowercase (monitoring_tool,",
+    "    entity_display_name, state_message) while the VictorOps ones are upper.",
+    "  - The env/name separator is ' : ', not ' - ', and Alertmanager lines can",
+    "    carry several ' - ' segments ('us-1 - prod - AlbUnhealthyHostWarning').",
+    "  - PandoLogic lines carry TWO parenthesised groups: labels, then the URL.",
+    "  - state_message is often just '*Alertmanager:* <url>' \u2014 no time window.",
+    "  - The link a human posts in #comms-noc is the VictorOps PORTAL url.",
+    "",
+    "Text is verbatim; nothing is sanitized because this repo already holds",
+    "production credentials and reads these channels live.",
+    "The 'firing ALB' case is the plain positive: a VictorOps incident that is FIRING, not auto-resolved, and not on the suppression list \u2014 i.e. the one shape that must actually open a thread."
+  ],
+  "messages": [
+    {
+      "_case": "victorops incident \u2014 engine failure rate (the automated route)",
+      "ts": "1787564193.534839",
+      "bot_id": "BCT64JZ16",
+      "text": "",
+      "attachments": [
+        {
+          "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/119881|Incident #119881>: [FIRING:1] aiw-prd5001 : Engine failure rate above 15%*\n[FIRING:1] aiw-prd5001 : Engine failure rate above 15%\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] aiw-prd5001 : Engine failure rate above 15%\nstate_message: *Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nACKED_AT: 1787564198284\nACKED_BY: hchudasama\nACK_TIMESTAMP: 1787566287621\nACK_USER: SYSTEM\nALERT_COUNT: 2\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: RESOLVED\nCURRENT_STATE: OK\nENTITY_ID: 613bfceb29237026c8af3f3e3e67581df0b2fd90170d924ec92ad8cbdef41cb5\nENTITY_SLUG: ---firing-1--aiw-prd5001---engine-failure-rate-above-15-\nINCIDENT_NAME: 119881\nINCIDENT_TIMESTAMP: 1787564187606\nLAST_TIMESTAMP: 1787566287621\nMONITOR_TYPE: UNKNOWN\nRESOLVED_AT: 1787566287621\nRESOLVED_BY: SYSTEM\nSERVICE: [FIRING:1] aiw-prd5001 : Engine failure rate above 15%\n```"
+        }
+      ]
+    },
+    {
+      "_case": "victorops incident \u2014 firing ALB alert, the plain trigger case",
+      "ts": "1787563239.553009",
+      "bot_id": "BCT64JZ16",
+      "text": "",
+      "attachments": [
+        {
+          "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/119880|Incident #119880>: [FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical*\n[FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical\nstate_message: *Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: FIRING\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 119880\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical\n```"
+        }
+      ]
+    },
+    {
+      "_case": "victorops incident \u2014 still firing, acked by a human, NOC-AUTOMATION sourced",
+      "ts": "1787567627.578229",
+      "bot_id": "BCT64JZ16",
+      "text": "",
+      "attachments": [
+        {
+          "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/119883|Incident #119883>: [CRITICAL] NOC Health Check - Systems Alerting*\n[CRITICAL] NOC Health Check - Systems Alerting\n```monitoring_tool: NOC Automation Script\nentity_display_name: [CRITICAL] NOC Health Check - Systems Alerting\nstate_message: NOC Health Check (CRITICAL) - 2026-08-24 10:32 UTC\n\naiWARE\n-  Cluster Processing Status:  CRITICAL\n  \u2514 aiw-prod1001 \u2500\u2500 engines: [bbb11671... (218)]\nACKED_AT: 1787567636182\nACKED_BY: hchudasama\nALERT_COUNT: 1\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nENTITY_ID: noc-status/alerts/1787567621\nINCIDENT_NAME: 119883\nMONITOR_TYPE: API\nSERVICE: [CRITICAL] NOC Health Check - Systems Alerting\n```"
+        }
+      ]
+    },
+    {
+      "_case": "victorops thread reply \u2014 ACKED (state change, never a trigger)",
+      "ts": "1787564198.770229",
+      "thread_ts": "1787564193.534839",
+      "bot_id": "BCT64JZ16",
+      "text": "",
+      "attachments": [
+        {
+          "text": "*<https://portal.victorops.com/ui/wazee-digital-inc/incident/119881|Incident #119881>* was *ACKED* for ([FIRING:1] aiw-prd5001 : Engine failure rate above 15%) by <@U0AV6JFBR0X> (<https://veritone.slack.com/archives/C909ZH4ET/p1787564193534839|jump to incident>)"
+        }
+      ]
+    },
+    {
+      "_case": "alertmanager warning \u2014 several ' - ' segments",
+      "ts": "1787567238.018399",
+      "bot_id": "B015LL65HR8",
+      "text": "",
+      "attachments": [
+        {
+          "text": "[FIRING:1] us-1 - prod - AlbUnhealthyHostWarning (http://thanos-alertmanager.ops.veritone.com/#/alerts?receiver=central-monitoring%2Freceiver-config%2Fslack-notifications)"
+        }
+      ]
+    },
+    {
+      "_case": "pandologic warning \u2014 two parenthesised groups, local alertmanager url",
+      "ts": "1787567026.898799",
+      "bot_id": "B015LL65HR8",
+      "text": "",
+      "attachments": [
+        {
+          "text": "[FIRING:1] PandoLogic - SQL41 DiskSpaceUtilizationWarning (pandologic 10.60.4.41:9182 windows_exporter warning SQL41 J: windows_exporter) (http://10.60.4.245:9093/#/alerts?receiver=slack-notifications)"
+        }
+      ]
+    },
+    {
+      "_case": "chronic staging noise \u2014 FIRING:45, fires every ~5 minutes, never actioned",
+      "ts": "1787564924.973249",
+      "bot_id": "B015LL65HR8",
+      "text": "",
+      "attachments": [
+        {
+          "text": "[FIRING:45] aiw-stg198 - KubePodCrashLooping (http://thanos-alertmanager.ops.veritone.com/#/alerts?receiver=central-monitoring%2Freceiver-config%2Fslack-notifications)"
+        }
+      ]
+    },
+    {
+      "_case": "jenkins smoke test report",
+      "ts": "1787565119.616019",
+      "bot_id": "B015LL65HR8",
+      "text": "",
+      "attachments": [
+        {
+          "text": ":warning: *Standard Apps Smoke Test Run \u2014 UNSTABLE*\n*Build:* <https://jenkins.tpx.veritone.io/job/DevOpsUtilities/job/Standard-Smoke-Test/job/standard-app-smoke-test-scheduled-job-v2/1045/|#1045>  |  *Duration:* 30 min\n\n:tada: *All environments healthy*\n\n*:flashlight: Illuminate*  \u00b7  *5/5* passed"
+        }
+      ]
+    }
+  ]
+}

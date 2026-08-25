@@ -1,37 +1,93 @@
 {
   "_comment": [
-    "alert fingerprint -> Grafana panels to attach as visual evidence in the",
-    "#comms-noc incident thread (DESIGN.md section 4.5).",
+    "VictorOps alerts whose answer IS a Grafana graph \u2014 resource/utilization alerts:",
+    "memory high, PVC/disk full, CPU high. Scope set by the owner, 2026-08-24.",
     "",
-    "Only VERIFIED entries belong here. A wrong panel id renders a real-looking",
-    "picture of the wrong graph, which is worse than no evidence. Discover and",
-    "confirm ids against thanos-grafana.ops.veritone.com before adding one:",
+    "NOT here on purpose: 'Engine failure rate above 15%' is an EDGE UI investigation",
+    "(engine, task counts, error type, logs) and already has its own pipeline.",
     "",
-    "  python -m oncall_agent.grafana --list-dashboards engine",
-    "  python -m oncall_agent.grafana --list-panels <dashboard_uid>",
+    "Variable templating:",
+    "  {env}       the alert's aiw-xxx environment key",
+    "  {label:N}   the Nth Alertmanager label VALUE from the alert's parentheses;",
+    "              negative counts from the end. Find the indices for a real alert with",
+    "                python py/scripts/replay_alert.py --labels --incident \"<the alert line>\"",
+    "  {instance}  shape-matched host:port (only emitted when unambiguous)",
+    "  {volume}    shape-matched Windows drive letter, e.g. 'J:'",
+    "An unresolvable placeholder DROPS that variable rather than sending Grafana a",
+    "literal '{label:4}' or an empty string \u2014 a panel on the dashboard default is",
+    "wrong-but-obvious, a panel on someone else's host is wrong-and-convincing.",
     "",
-    "Lookup key: the alert's own alertname first, then the case-library",
-    "fingerprint. Keys are matched the way the alert reads in Slack, so a",
-    "compound key ('KubePodsNotReady / KubePodCrashLooping') also matches each",
-    "half on its own. {env} in a variable value is replaced with the alert's",
-    "aiw-xxx environment key.",
-    "",
-    "See config/panel_map.example.json for both accepted entry shapes.",
-    "",
-    "STILL UNMAPPED (deliberately): Kube*, NSQ/backlog, PandoLogic and Runscope",
-    "alert types. thanos-grafana carries many near-identical per-cluster copies",
-    "of those dashboards and picking the right one is a judgment call for whoever",
-    "knows which cluster each alert refers to - not something to guess."
+    "STATUS: dashboard uids and panel ids are verified to exist and render. The",
+    "label INDICES are inferred from sample alert lines and should be confirmed",
+    "against a real fire of each type before trusting the picture."
   ],
   "dashboard_uid": null,
   "default_from": "now-6h",
   "panels_by_alertname": {
-    "Engine failure rate above 15%": {
-      "_verified": "2026-08-24 — dashboard 'aiWARE Engine task failure rate 2'; its $env variable takes exactly the aiw-xxx keys this repo uses, so {env} substitution lands on the right cluster.",
-      "dashboard_uid": "f187d260-e494-4f91-9970-db27a161f033",
-      "panels": [1, 2, 4],
-      "from": "now-3h",
-      "variables": { "var-env": "{env}" }
+    "KubePersistentVolumeFillingUp": {
+      "_dashboard": "ai13s - Kubernetes / Persistent Volumes",
+      "_labels_seen": "kubelet | <namespace> | <volume> | <env> | <severity>",
+      "dashboard_uid": "9192a8e8041bd567",
+      "panels": [
+        2,
+        1
+      ],
+      "from": "now-6h",
+      "variables": {
+        "var-env": "{env}",
+        "var-namespace": "{label:1}",
+        "var-volume": "{label:2}"
+      }
+    },
+    "VM ActiveRedAlarms / VM ActiveYellowAlarms": {
+      "_dashboard": "VMware VM \u2014 covers VmMemoryUsageAlarm / VmCPUUsageAlarm",
+      "_labels_seen": "n/a | triggeredAlarm:<X> | <cluster> | <datacenter> | <datastore> | pandologic | <esx fqdn> | vmware_vcenter | <severity> | n/a | <VM NAME>",
+      "dashboard_uid": "6195d31f-8b29-4ca3-843f-89dcf35427d8",
+      "panels": [
+        18,
+        17,
+        48
+      ],
+      "from": "now-6h",
+      "variables": {
+        "var-vm": "{label:-1}"
+      }
+    },
+    "DiskSpaceUtilizationWarning / DiskSpaceUtilizationCritical": {
+      "_dashboard": "10. General Windows Host Metrics Overview ($host is an instance host:port)",
+      "_labels_seen": "pandologic | <instance> | windows_exporter | <severity> | <host> | <drive> | windows_exporter",
+      "dashboard_uid": "rvykW6zZk",
+      "panels": [
+        33,
+        11
+      ],
+      "from": "now-6h",
+      "variables": {
+        "var-job": "windows_exporter",
+        "var-host": "{instance}"
+      }
+    },
+    "High memory utilization": {
+      "_dashboard": "2. Windows Server Details Dashboard - With Services",
+      "_shape": "Zabbix/email-sourced: '<description> (<threshold>) - <HOST>'. No [FIRING:n], no label group; the host is the trailing token and lands in {host}.",
+      "_why_resolve": "Panel 21 filters on $instance ('10.199.1.11:9182'), while the alert only names the host ('STG-SVC120'). Setting $hostname alone leaves $instance empty and the gauge renders a green 'N/A'. The resolve block looks the instance up in Prometheus instead of guessing it.",
+      "dashboard_uid": "Sad3g6Y2d",
+      "panels": [
+        21
+      ],
+      "from": "now-6h",
+      "resolve": {
+        "instance": {
+          "datasource": "thanos-main-ds",
+          "query": "windows_os_hostname{hostname=\"{host}\"}",
+          "label": "instance"
+        }
+      },
+      "variables": {
+        "var-job": "windows_exporter",
+        "var-hostname": "{host}",
+        "var-instance": "{resolve:instance}"
+      }
     }
   }
 }

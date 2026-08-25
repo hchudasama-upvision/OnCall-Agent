@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Tools for the investigating model (see py/oncall_agent/investigate.py).",
+    "noc_slack   read-only Slack: what #comms-noc did for this alert before.",
+    "noc_grafana search dashboards, read what a panel queries, run PromQL, render a panel.",
+    "",
+    "Both are read-only apart from render_panel, which writes a PNG into dist/evidence.",
+    "Neither can post to Slack — the bot token does that, in our code, after validation.",
+    "",
+    "\"command\": \"python\" is only a fallback for running `claude` by hand from an",
+    "activated venv. investigate.py rewrites this at run time to the interpreter the",
+    "agent itself is running under, so the servers always have their dependencies."
+  ],
+  "mcpServers": {
+    "noc_slack": {
+      "command": "python",
+      "args": ["-m", "oncall_agent.slack_mcp_server"],
+      "cwd": "py",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    "noc_grafana": {
+      "command": "python",
+      "args": ["-m", "oncall_agent.grafana_mcp_server"],
+      "cwd": "py",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    }
+  }
+}

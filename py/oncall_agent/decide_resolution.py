@@ -91,6 +91,10 @@ class Decision:
     root_cause_narrative: str
     owning_team_mention: str
     posts: List[PlannedPost]
+    # A state-changing step the agent believes is needed but must NOT perform.
+    # {"summary", "command", "risk"} or None. Posted for a human to approve;
+    # nothing in this repo can execute it.
+    proposed_action: Optional[dict] = None
 
 
 def _format_history(history: HistoryFetchResult) -> str:
@@ -204,11 +208,33 @@ def decide_resolution(
     if output is None:
         raise RuntimeError(f"claude CLI did not return structured_output: {result.stdout[:500]}")
 
-    return _validate_and_parse(output, incident, allowed_keys)
+    return _validate_and_parse(output, incident, allowed_keys, evidence)
+
+
+_URL_PATTERN = re.compile(r"https?://[^\s|>)\]]+")
+
+
+def _normalize_url(url: str) -> str:
+    """Trim punctuation prose leaves on a URL, and any trailing slash."""
+    return url.rstrip(".,;:!?)]}>|\"'").rstrip("/")
+
+
+def _urls_in_evidence(incident: VictorOpsIncident,
+                      evidence: Optional[EdgeUiTaskEvidence]) -> set:
+    """Every URL the model was actually shown, normalized for comparison."""
+    corpus = [incident.slack_permalink or "", incident.state_message or ""]
+    if evidence is not None:
+        corpus.append(" ".join(evidence.error_log_lines or []))
+        corpus.append(evidence.error_type or "")
+    found = set()
+    for text in corpus:
+        found.update(_normalize_url(u) for u in _URL_PATTERN.findall(text or ""))
+    return found
 
 
 def _validate_and_parse(
-    output: dict, incident: VictorOpsIncident, allowed_keys: Optional[set] = None
+    output: dict, incident: VictorOpsIncident, allowed_keys: Optional[set] = None,
+    evidence: Optional[EdgeUiTaskEvidence] = None,
 ) -> Decision:
     allowed_keys = ALLOWED_EVIDENCE_KEYS if allowed_keys is None else allowed_keys
     posts: List[PlannedPost] = []
@@ -219,14 +245,26 @@ def _validate_and_parse(
             raise RuntimeError(f"Decision referenced unknown evidence keys {bad_keys} — refusing to post")
         posts.append(PlannedPost(text=raw_post["text"], evidence_keys=keys))
 
-    # Guard against fabricated links: any http(s) URL in the text must be the
-    # incident's own real permalink (if we gave it one) — nothing else.
-    allowed_url = incident.slack_permalink or None
-    url_pattern = re.compile(r"https?://\S+")
+    # Guard against fabricated links. A URL is allowed only if it appears
+    # VERBATIM in something we showed the model: the incident's own permalink,
+    # or the evidence itself.
+    #
+    # The evidence part matters and was missing: engine error logs routinely
+    # contain URLs — a real run failed on
+    # "http://radio.talksport.com/stream" quoted straight out of the failing
+    # task's error line. Quoting evidence is the opposite of fabricating, so
+    # refusing it blocked a correct thread. What must still be impossible is a
+    # URL the model invented, which is why this is exact matching against the
+    # supplied text and not a host allow-list.
+    allowed_urls = _urls_in_evidence(incident, evidence)
     for post in posts:
-        for url in url_pattern.findall(post.text):
-            if not allowed_url or allowed_url not in url:
-                raise RuntimeError(f"Decision text contains an unexpected URL not in evidence: {url!r} — refusing to post")
+        for raw_url in _URL_PATTERN.findall(post.text):
+            url = _normalize_url(raw_url)
+            if url not in allowed_urls:
+                raise RuntimeError(
+                    f"Decision text contains a URL that appears nowhere in the incident or its "
+                    f"evidence: {raw_url!r} — refusing to post"
+                )
 
     owning_team_mention = output.get("owning_team_mention", "")
     if owning_team_mention and not owning_team_mention.startswith("@"):

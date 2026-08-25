@@ -44,6 +44,8 @@ def run_engine_failure_pipeline(
     history: Optional[HistoryFetchResult] = None,
     panel_fingerprint: str = "",
     log: Callable[[str], None] = print,
+    thread_ts: str = "",
+    with_buttons: bool = False,
 ) -> Decision:
     """Gather Edge UI evidence for one engine-failure incident, decide, post.
 
@@ -139,7 +141,8 @@ def run_engine_failure_pipeline(
     )
 
     if client and channel:
-        post_decided_thread(client, channel, incident, decision, evidence_file_paths)
+        post_decided_thread(client, channel, incident, decision, evidence_file_paths,
+                            log=log, thread_ts=thread_ts, with_buttons=with_buttons)
     else:
         DryRunSlackPoster(log=log).post_decided_thread(incident, decision, evidence_file_paths)
 

@@ -22,10 +22,14 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import bootstrap  # noqa: E402  — must precede third-party imports
+
+bootstrap()
 
 from dotenv import load_dotenv
 from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
 
 from oncall_agent import listener
 from oncall_agent.config import describe, load_config
@@ -45,8 +49,22 @@ def replay_message(url: str, config, log) -> int:
     config.alerts_channel = channel
     config = listener.resolve_channels(config, client, log=log)
 
-    res = client.conversations_history(channel=channel, latest=ts, oldest=ts,
-                                       inclusive=True, limit=1)
+    try:
+        res = client.conversations_history(channel=channel, latest=ts, oldest=ts,
+                                           inclusive=True, limit=1)
+    except SlackApiError as e:
+        # Every other read path in this repo degrades to "unavailable, here is
+        # why"; this one used to let the raw SlackApiError escape as a
+        # traceback, which reads like a crash rather than a missing scope.
+        error = e.response.get("error", str(e))
+        hint = {
+            "missing_scope": (f"the token needs channels:history (groups:history for a "
+                              f"private channel). It has: {e.response.get('provided', '?')}"),
+            "not_in_channel": "invite the app to that channel first",
+            "channel_not_found": "wrong channel id, or a private channel the token cannot see",
+        }.get(error, "")
+        raise SystemExit(f"Cannot read {channel}: {error}" + (f" — {hint}" if hint else ""))
+
     messages = res.get("messages", [])
     if not messages:
         raise SystemExit(f"No message at {ts} in {channel} — is the bot in that channel?")

@@ -57,6 +57,25 @@ class Cursor:
         self.path.write_text(json.dumps({"last_ts": ts}))
 
 
+def own_identities(client: WebClient, log=_log) -> set:
+    """Every id Slack might stamp on a message this agent posts.
+
+    auth.test returns both the bot's user_id and its bot_id; a message carries
+    one or the other depending on how it was sent, so both are collected.
+    Without this the agent reads its own reply, sees an alert-shaped message,
+    and investigates itself — cheap to prevent, expensive to notice.
+    """
+    try:
+        auth = client.auth_test()
+    except SlackApiError as e:
+        log(f"could not determine own identity ({e.response.get('error', e)}) — "
+            f"self-loop protection is DEGRADED")
+        return set()
+    ids = {i for i in (auth.get("bot_id"), auth.get("user_id")) if i}
+    log(f"own identities (never triaged): {sorted(ids)}")
+    return ids
+
+
 def resolve_channels(config: AgentConfig, client: WebClient, log=_log) -> AgentConfig:
     """Turn any channel names in config into ids, once, at startup."""
     for attr in ("alerts_channel", "comms_channel", "history_channel"):
@@ -98,18 +117,18 @@ def fetch_new_messages(
 
 def process_message(
     message: dict, config: AgentConfig, client: Optional[WebClient],
-    seen: SeenStore, log=_log,
+    seen: SeenStore, log=_log, own_ids: Optional[set] = None,
 ) -> HandledAlert:
     alert: ParsedAlert = parse_alert_message(message, channel_id=config.alerts_channel)
-    return handle_alert(alert, config, client, seen, log=log)
+    return handle_alert(alert, config, client, seen, log=log, own_ids=own_ids)
 
 
 def run_once(config: AgentConfig, client: WebClient, seen: SeenStore,
-             cursor: Cursor, log=_log) -> int:
+             cursor: Cursor, log=_log, own_ids: Optional[set] = None) -> int:
     messages = fetch_new_messages(client, config, cursor, log=log)
     for message in messages:
         try:
-            process_message(message, config, client, seen, log=log)
+            process_message(message, config, client, seen, log=log, own_ids=own_ids)
         except SystemExit as e:
             # The engine-failure pipeline aborts loudly (missing env, window
             # drift, no failing engine). That must kill the one alert, never
@@ -125,10 +144,11 @@ def run_once(config: AgentConfig, client: WebClient, seen: SeenStore,
 def run_polling(config: AgentConfig, client: WebClient, log=_log) -> None:
     seen = SeenStore(config.state_dir / "seen.json", config.dedupe_window_minutes)
     cursor = Cursor(config.state_dir / "cursor.json")
+    own_ids = own_identities(client, log=log)
     log(f"polling #{config.alerts_channel} every {config.poll_seconds}s "
         f"(cursor: {cursor.value or f'last {config.lookback_minutes}m'})")
     while True:
-        count = run_once(config, client, seen, cursor, log=log)
+        count = run_once(config, client, seen, cursor, log=log, own_ids=own_ids)
         if count:
             log(f"processed {count} message(s)")
         time.sleep(config.poll_seconds)
@@ -139,12 +159,12 @@ def run_socket_mode(config: AgentConfig, client: WebClient, log=_log) -> None:
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
     seen = SeenStore(config.state_dir / "seen.json", config.dedupe_window_minutes)
+    own_ids = own_identities(client, log=log)
 
     # The alerts we care about are posted BY integrations, so Bolt's default
-    # of dropping bot messages would drop everything. Safe because the
-    # handler only reacts to messages in alerts_channel and every reply the
-    # agent writes goes to comms_channel — if that ever changes, add a
-    # bot_id self-check here or the agent will triage its own output.
+    # of dropping bot messages would drop everything. The self-check that
+    # replaces it lives in handler.should_handle(own_ids=...) — mandatory now
+    # that alerts_channel and comms_channel can be the same channel.
     app = App(token=config.slack_bot_token, ignoring_self_events_enabled=False)
 
     @app.event("message")
@@ -156,7 +176,7 @@ def run_socket_mode(config: AgentConfig, client: WebClient, log=_log) -> None:
         if event.get("subtype") not in (None, "bot_message"):
             return                                  # edits/deletes/joins
         try:
-            process_message(event, config, client, seen, log=log)
+            process_message(event, config, client, seen, log=log, own_ids=own_ids)
         except SystemExit as e:
             log(f"alert aborted: {e}")
         except Exception as e:                      # noqa: BLE001

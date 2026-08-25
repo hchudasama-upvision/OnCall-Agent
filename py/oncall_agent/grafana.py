@@ -41,6 +41,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Optional
 
 TIMEOUT = 30
 
@@ -168,6 +169,27 @@ def panel_data(datasource_uid: str, expr: str, from_="now-6h", to="now", step_se
     }
     raw, _ = _request("/api/ds/query", method="POST", body=body)
     return json.loads(raw)
+
+
+def resolve_label(datasource_uid: str, promql: str, label: str) -> Optional[str]:
+    """Run an instant query and return one label value from the first series.
+
+    This exists because a dashboard variable is often NOT the thing the alert
+    carries. "2. Windows Server Details" chains $job -> $hostname -> $instance,
+    and its memory panel filters on $instance ("10.199.1.11:9182") while a
+    Zabbix alert only names the host ("STG-SVC120"). Setting $hostname alone
+    leaves $instance empty and the panel renders a green "N/A" gauge — a real
+    reading, apparently, of nothing. Resolving the value against Prometheus
+    turns a guess into a lookup.
+    """
+    query = urllib.parse.quote(promql)
+    raw, _ = _request(f"/api/datasources/proxy/uid/{datasource_uid}/api/v1/query?query={query}")
+    results = json.loads(raw).get("data", {}).get("result") or []
+    for series in results:
+        value = (series.get("metric") or {}).get(label)
+        if value:
+            return value
+    return None
 
 
 def renderer_available() -> bool:

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oncall-agent"
+version = "0.1.0"
+description = "NOC on-call alert automation: watch #alerts-devops, investigate, post evidence to #comms-noc"
+requires-python = ">=3.11"
+dependencies = [
+    "slack_sdk",
+    "python-dotenv",
+    "requests",
+    "playwright",
+    "slack-bolt",
+]
+
+[project.optional-dependencies]
+# Only for LLM_PROVIDER=anthropic. The default provider shells out to the
+# Claude Code CLI and needs no SDK.
+anthropic = ["anthropic"]
+
+# The package lives under py/ rather than at the repo root, because the root
+# also holds the superseded TypeScript tree (src/), the config/ and data/ files
+# the agent reads at runtime, and DESIGN.md. `pip install -e .` is what lets
+# `python -m oncall_agent.grafana` work from any directory instead of only
+# from py/ or with PYTHONPATH=py set.
+[tool.setuptools]
+package-dir = { "" = "py" }
+
+[tool.setuptools.packages.find]
+where = ["py"]
+include = ["oncall_agent*"]

@@ -284,5 +284,51 @@
     ],
     "escalation": "VMware/app owner for sustained alarms",
     "example_commands": []
+  },
+  {
+    "_STATUS": "DRAFT \u2014 assembled from what the agent itself discovered on real runs (2026-08-24/25). NOT confirmed by a human. Correct or delete anything wrong; the model is told to verify this, not obey it.",
+    "fingerprint": "HighMemoryUtilization/windows",
+    "alertname": "High memory utilization",
+    "alert_pattern": "High memory utilization (>95% for 5m) - SVC182",
+    "environment": "PandoLogic Windows hosts (Zabbix-sourced, env=pandologic). NOT the aiw-* Kubernetes clusters.",
+    "occurrences_observed": 0,
+    "typical_resolution_minutes": 0,
+    "dashboard": {
+      "_verified": "rendered successfully for SVC182 on 2026-08-25",
+      "name": "2. Windows Server Details Dashboard - With Services",
+      "uid": "Sad3g6Y2d",
+      "panel": "21 \u2014 Memory Utilization (gauge)",
+      "gotcha": "Panel 21 filters on $instance (e.g. 10.60.4.182:9182), NOT on $hostname. The alert only gives the hostname, so set $hostname AND resolve $instance first, or the gauge renders a green 'N/A' that looks like a real reading."
+    },
+    "diagnosis_steps": [
+      "Translate the hostname the alert gives you into the instance the panel needs: windows_os_hostname{hostname=\"<HOST>\"} returns instance=<ip>:9182.",
+      "Confirm the host actually reports memory before rendering: windows_os_physical_memory_free_bytes{instance=\"<ip>:9182\"}. Zero series means no graph is possible for this host.",
+      "Render panel 21 with var-job=windows_exporter, var-hostname=<HOST>, var-instance=<ip>:9182.",
+      "Check whether the condition has already cleared \u2014 these often self-resolve before anyone looks."
+    ],
+    "resolution_steps": [
+      "Read the graph: still climbing, flat, or already released?",
+      "If it has released, say so and recommend ack + resolve rather than opening an investigation.",
+      "If still high, identify what is holding the memory before recommending anything \u2014 the agent cannot see processes, only the metric."
+    ],
+    "gotchas": [
+      "ONLY 21 OF 178 Windows hosts export the memory metric. Observed reporting: FTP, NY1WV5851, PowerBi3, SQL43, STG-ITAdmin, SVC144, SVC151, SVC158, SVC174, SVC175, SVC176, SVC182, SVC184, SVC187, SVC188, SVC70, Web30, Web31, Web32, Web33, ny1wv5852. If the alerting host is not one of these there is no graph to post \u2014 say that plainly instead of attaching an empty panel.",
+      "SVC183 specifically does NOT report memory, despite SVC182/184/187/188 all doing so.",
+      "This alert has no [FIRING:n] and no label group \u2014 the host is the bare token after the last ' - '. Do not look for Alertmanager labels.",
+      "The agent is read-only: it can show the graph, not free the memory."
+    ],
+    "escalate_to": [
+      {
+        "when": "memory still climbing and no owner obvious",
+        "slack_id": "",
+        "name": "TODO \u2014 who owns the PandoLogic Windows fleet?",
+        "why": "the agent currently ends with 'someone confirm the handle'; filling this in is what lets it @mention"
+      }
+    ],
+    "example_commands": [
+      "windows_os_hostname{hostname=\"SVC182\"}",
+      "100 - (windows_os_physical_memory_free_bytes{instance=\"$instance\"} / windows_cs_physical_memory_bytes{instance=\"$instance\"})*100"
+    ],
+    "escalation": "TODO \u2014 see escalate_to"
   }
 ]

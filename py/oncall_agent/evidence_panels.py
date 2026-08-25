@@ -90,8 +90,81 @@ class PanelMap:
             for variant in _split_variants(key):
                 self._index.setdefault(variant.lower(), normalized)
 
-    def specs_for(self, fingerprint: str, env_key: Optional[str] = None) -> List[PanelSpec]:
-        entry = self._index.get((fingerprint or "").lower())
+    def _suffix_match(self, key: str) -> Optional[dict]:
+        """Match a mapping key that the alert name merely ENDS with.
+
+        PandoLogic renders the host into the alertname — the line reads
+        "PandoLogic - SQL41 DiskSpaceUtilizationWarning", so the parsed name is
+        "SQL41 DiskSpaceUtilizationWarning" and an exact lookup on
+        "DiskSpaceUtilizationWarning" misses. Anchored on a word boundary and
+        longest-key-first, so "DiskSpaceUtilizationCritical" can never be
+        satisfied by a mapping for "...Warning".
+        """
+        if not key:
+            return None
+        for candidate in sorted(self._index, key=len, reverse=True):
+            if key == candidate or key.endswith(" " + candidate):
+                return self._index[candidate]
+        return None
+
+    @staticmethod
+    def _substitute(template: str, env_key: Optional[str], labels: Optional[List[str]],
+                    hints: Optional[Dict[str, str]]) -> Optional[str]:
+        """Fill {env}, {label:N} and {hint} in a template-variable value.
+
+        {label:N} indexes the alert's label values (negative counts from the
+        end) — explicit, checkable, and stable because Alertmanager renders a
+        given alert type's labels in a fixed order. Returns None when a
+        placeholder cannot be resolved, so the caller can drop the variable
+        rather than send Grafana the literal string "{label:4}".
+        """
+        labels = labels or []
+        hints = hints or {}
+        out = template
+        if "{env}" in out:
+            if not env_key:
+                return None
+            out = out.replace("{env}", env_key)
+        for index_text in re.findall(r"\{label:(-?\d+)\}", out):
+            try:
+                value = labels[int(index_text)]
+            except (IndexError, ValueError):
+                return None
+            out = out.replace(f"{{label:{index_text}}}", value)
+        for name in re.findall(r"\{(resolve:[a-z_]+|[a-z_]+)\}", out):
+            if name not in hints:
+                return None
+            out = out.replace(f"{{{name}}}", hints[name])
+        return out
+
+    def _resolve_lookups(self, entry: dict, env_key, labels, hints) -> Dict[str, str]:
+        """Run the entry's `resolve` block and return {name: value}.
+
+        A failed lookup yields nothing, so the variable that depends on it is
+        dropped and the panel is refused by the empty-panel guard — which is
+        the right outcome: better no graph than one of the wrong host.
+        """
+        resolved: Dict[str, str] = {}
+        for name, rule in (entry.get("resolve") or {}).items():
+            promql = self._substitute(rule.get("query", ""), env_key, labels, hints)
+            if not promql:
+                continue
+            try:
+                value = grafana.resolve_label(
+                    rule.get("datasource", "thanos-main-ds"), promql, rule.get("label", name))
+            except Exception:                       # noqa: BLE001 — lookup is best-effort
+                value = None
+            if value:
+                resolved[name] = value
+        return resolved
+
+    def specs_for(self, fingerprint: str, env_key: Optional[str] = None,
+                  labels: Optional[List[str]] = None,
+                  hints: Optional[Dict[str, str]] = None) -> List[PanelSpec]:
+        key = (fingerprint or "").lower().strip()
+        entry = self._index.get(key)
+        if not entry:
+            entry = self._suffix_match(key)
         if not entry:
             return []
         dashboard_uid = entry.get("dashboard_uid") or self.default_dashboard_uid
@@ -102,10 +175,25 @@ class PanelMap:
                 f'panel_map.json maps "{fingerprint}" to panels but no dashboard_uid is set '
                 f"(neither on the entry nor at the top level)"
             )
-        variables = {
-            k: v.replace("{env}", env_key or "") if isinstance(v, str) else v
-            for k, v in (entry.get("variables") or {}).items()
-        }
+        # Lookups first: a resolved value becomes just another hint, so
+        # {resolve:instance} and {host} substitute through the same path.
+        hints = dict(hints or {})
+        for name, value in self._resolve_lookups(entry, env_key, labels, hints).items():
+            hints[f"resolve:{name}"] = value
+
+        variables: Dict[str, str] = {}
+        for key, raw_value in (entry.get("variables") or {}).items():
+            if not isinstance(raw_value, str):
+                variables[key] = raw_value
+                continue
+            resolved = self._substitute(raw_value, env_key, labels, hints)
+            if resolved is None:
+                # Unresolvable variable: Grafana would fall back to the
+                # dashboard default, i.e. someone else's host. Drop it and let
+                # the panel render with its own default rather than a wrong
+                # value dressed up as the alert's.
+                continue
+            variables[key] = resolved
         return [
             PanelSpec(
                 dashboard_uid=dashboard_uid,

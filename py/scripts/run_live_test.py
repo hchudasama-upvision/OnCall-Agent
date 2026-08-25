@@ -5,7 +5,10 @@ contract as the previous TypeScript run-live-test.ts, so a different
 environment or engine never requires a code edit:
 
   python run_live_test.py "Incident #119875: [FIRING:1] aiw-prd5001 : Engine failure rate above 15%" \\
-      "SI2 Playback segment creator" [windowMinutes] [slackPermalink]
+      "SI2 Playback segment creator" [windowMinutes] [slackPermalink] [--live]
+
+Dry run by default (POST_MODE): the evidence is gathered for real and the
+thread is printed instead of posted. --live posts it.
 
 windowMinutes and slackPermalink are optional and order-independent after the
 first two args: a purely numeric trailing arg is the window (default 15,
@@ -30,7 +33,10 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import bootstrap  # noqa: E402  — must precede third-party imports
+
+bootstrap()
 
 from dotenv import load_dotenv
 from slack_sdk import WebClient
@@ -77,17 +83,32 @@ def parse_incident_from_args(argv: list) -> tuple:
 
 def main():
     load_dotenv()
-    incident, window_minutes = parse_incident_from_args(sys.argv[1:])
+    # --live may appear anywhere; strip it before the positional parse (it is
+    # neither numeric nor an http URL, so the scans below would ignore it, but
+    # leaving it in would let a typo like "--live" land as the engine name).
+    argv = [a for a in sys.argv[1:] if a != "--live"]
+    explicit_live = "--live" in sys.argv[1:]
+    incident, window_minutes = parse_incident_from_args(argv)
 
     slack_bot_token = os.environ.get("SLACK_BOT_TOKEN")
     slack_channel = os.environ.get("SLACK_CHANNEL")
+    # Honour POST_MODE like every other entry point. This script used to post
+    # whenever a token and channel were both present, which became a trap once
+    # POST_MODE=dry_run was documented as the safety default: the .env that
+    # makes the pipeline work is exactly the .env that made it post. Pass
+    # --live (or set POST_MODE=live) for the old behaviour.
+    live = explicit_live or (os.environ.get("POST_MODE") or "dry_run").lower() == "live"
     client = WebClient(token=slack_bot_token) if slack_bot_token else None
+
+    if not live:
+        print("POST_MODE=dry_run — gathering real evidence, printing the thread "
+              "instead of posting. Pass --live (or set POST_MODE=live) to post.\n")
 
     run_engine_failure_pipeline(
         incident,
         window_minutes=window_minutes,
         client=client,
-        channel=slack_channel if (slack_bot_token and slack_channel) else None,
+        channel=slack_channel if (live and slack_bot_token and slack_channel) else None,
         screenshot_dir=Path.cwd() / "dist" / "evidence",
     )
 
