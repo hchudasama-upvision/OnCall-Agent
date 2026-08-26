@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "Alert -> specialist routing. Engine-failure alerts are NOT here: they're",
+    "matched by alert_parser.is_engine_failure_rate() (a precise regex), not a",
+    "keyword list, since 'engine failure rate' alert titles vary too much for a",
+    "plain substring match to be safe either way.",
+    "",
+    "Everything below is a case-insensitive substring match against the alert's",
+    "alertname/incident_name/raw_text. First specialist whose keyword list has a",
+    "hit wins. No match -> generalist fallback (case-library + Slack history,",
+    "no domain tool) rather than a wrong guess.",
+    "",
+    "Editable without touching code, same spirit as data/cases.json and",
+    "config/panel_map.json — add a keyword here as new alert types are learned."
+  ],
+  "routes": [
+    {
+      "specialist": "kubernetes",
+      "keywords": [
+        "KubePodsNotReady", "KubePodCrashLooping", "KubePodNotReady",
+        "KubePersistentVolumeFilling", "KubeHpaMaxedOut", "KubeDeployment"
+      ]
+    },
+    {
+      "specialist": "runscope",
+      "keywords": [
+        "Track Job", "Site DNS Valdation", "SOLR Asset Reindex", "Public Stream",
+        "CNBC", "Runscope"
+      ]
+    },
+    {
+      "specialist": "grafana_metrics",
+      "keywords": [
+        "DiskSpaceUtilization", "VM Disk Usage", "High memory utilization",
+        "ActiveYellowAlarms", "ActiveRedAlarms", "AlbUnhealthyHost",
+        "API Success Rate", "ApiSuccessRate", "ThanosReceiveForward",
+        "ThanosComponentHighMemory", "NFSConnectionCheckFailed",
+        "SqsMessageAge", "EngineBacklog", "SiteErrorStatusCodes"
+      ]
+    }
+  ]
+}

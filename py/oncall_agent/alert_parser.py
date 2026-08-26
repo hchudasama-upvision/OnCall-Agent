@@ -1,7 +1,6 @@
 import re
 from typing import Dict, List, Optional
 
-from .edge_environments import extract_environment_key
 from .types import ParsedAlert, VictorOpsIncident
 
 """
@@ -240,6 +239,15 @@ def _first(fields: Dict[str, str], *keys: str) -> str:
         if fields.get(key):
             return fields[key]
     return ""
+
+
+def extract_environment_key(text: str) -> Optional[str]:
+    """Pulls the "aiw-xxx" environment key out of a VictorOps incident title/
+    entity name. Generic across every alert domain (any alert can name an
+    environment, not just engine-failure ones) — agents/edge_ui/ re-uses this
+    same function rather than a domain-local copy."""
+    match = re.search(r"\baiw-[a-z0-9]+\b", text, re.IGNORECASE)
+    return match.group(0).lower() if match else None
 
 
 def parse_alert_message(message: dict, channel_id: str = "", permalink: str = "") -> ParsedAlert:

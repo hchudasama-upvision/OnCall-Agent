@@ -1,0 +1,25 @@
+[
+  {
+    "fingerprint": "TrackJob-Runscope/*",
+    "alertname": "Track Job (Runscope API monitor)",
+    "alert_pattern": "Incident: AWS US (us-1) - Track Job / AWS SLED (us-gov-1) - Track Job (monitoring_tool: Runscope)",
+    "environment": "synthetic API monitors per environment",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": 20,
+    "diagnosis_steps": [
+      "Check the failing assertion in the Runscope test result (observed: \"Status '500' was not a number equal to 200\")",
+      "Run/await the next test execution - transient 5xx often passes on the subsequent run",
+      "Run the equivalent manual test (submit a job / API call) to confirm the platform actually works"
+    ],
+    "resolution_steps": [
+      "Most occurrences: subsequent automated test passes AND manual test passes -> document 'Manual test passed', resolved",
+      "If the manual test also fails: treat as a real API incident - pivot to the ApiSuccessRate playbook (5xx log investigation)"
+    ],
+    "gotchas": [
+      "Single-run Runscope failures are noisy; two consecutive failures or a failing manual test is the real signal",
+      "The same alert on multiple envs simultaneously suggests a shared dependency, not coincidence"
+    ],
+    "escalation": "None for transient; API on-call for confirmed failures",
+    "example_commands": []
+  }
+]

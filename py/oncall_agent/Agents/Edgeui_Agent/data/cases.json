@@ -1,0 +1,176 @@
+[
+  {
+    "fingerprint": "EngineFailureRate/*",
+    "alertname": "Engine failure rate above 15% / Engine failure rate 100%",
+    "alert_pattern": "[FIRING:1] <env> : Engine failure rate above 15%/100% (sometimes with 'for all engine in every Environment' appended \u2014 that phrase is misleading, see gotchas)",
+    "environment": "any aiWARE Edge/Controller environment; the specific failing engine varies incident to incident",
+    "occurrences_observed": 9,
+    "distinct_engines_seen": [
+      "SI2 Playback segment creator",
+      "THEFA Hourly Content Notifications",
+      "Docling Chunk Engine",
+      "WideOrbit Traffic",
+      "Translate Foreign Audio",
+      "Podcast Adapter"
+    ],
+    "typical_resolution_minutes": null,
+    "resolution_time_note": "No single typical duration \u2014 varies from a same-release-cycle fix (SI2 Playback: alert kept firing for days after the revert PR merged, until the fix actually deployed to the affected cluster) to weeks-open with no fix (WideOrbit: 14+ re-fires over 3+ weeks; THEFA and Docling: recurring with no fix mentioned across multiple months). Do not assume this self-resolves quickly.",
+    "diagnosis_steps": [
+      "VictorOps auto-posts the alert to #comms-noc as 'Alert: Incident #NNNNN: [FIRING:1] <env> : Engine failure rate above 15%/100%' (sometimes with the engine name already appended).",
+      "On-call engineer opens Edge UI for that environment/cluster and identifies the specific failing engine and its Engine ID \u2014 the alert title's 'for all engine in every Environment' wording is often literally false; it is usually one engine failing hard.",
+      "Quantify the failure with a Tasks-page screenshot: X tasks / Y% failed in the last N minutes/hours.",
+      "Classify the Error Type (bad_data / internal_error / connection / api / unknown) and paste the raw ETGN error JSON blob copied from task logs.",
+      "Download and attach the job/task log zip files from Edge UI.",
+      "If infra is suspected, check pod status directly (kubectl get pods) \u2014 Running does NOT mean tasks will succeed (see gotchas).",
+      "If the same engine/error signature has fired before, link back to the earlier thread instead of re-diagnosing from scratch.",
+      "@-mention the person/team believed to own that engine \u2014 this is tribal knowledge, not a documented map, so expect several escalation hops for less-common engines.",
+      "Owner investigates further: reproduces locally, requests full logs, or inspects actual container/engine logs (task record's failureMsg can be null/opaque).",
+      "Root cause identified: either a code fix (PR/revert) or a Jira ticket for a slower/vendor-side fix.",
+      "If a deploy is required, someone explicitly confirms the rollout plan/timing before the thread is considered handled.",
+      "Alert continues re-firing until the deploy actually lands on the affected cluster, even after the fix PR is merged \u2014 do not treat 'PR merged' as 'resolved'."
+    ],
+    "resolution_steps": [
+      "Code regression: revert the offending PR and deploy the reverted build to the SPECIFIC affected cluster (not just merge it).",
+      "Third-party/vendor-side or data-quality issue: file a Jira ticket and hand off to the actual owning team rather than trying to code a fix directly.",
+      "Automate/scheduled-flow issue: hand off to the flow's real auth owner to review the flow definition.",
+      "Confirmed test/non-production traffic causing false-positive failures: only silence after the engine's code owner explicitly confirms it and asks for it \u2014 never silence unilaterally.",
+      "Backlog-only failures: wait for the backlog to drain and confirm via a follow-up post rather than treating it as a code issue."
+    ],
+    "gotchas": [
+      "The alert text 'Engine failure rate 100% for all engine in every Environment' is misleading \u2014 in every real thread it turned out to be one specific engine, not literally all engines; confirm the actual engine name via Edge UI before acting.",
+      "Task-level failureMsg can be null even when there IS a real, specific root cause (WideOrbit: invisible at the task-API level for two weeks, only visible in engine container logs).",
+      "Pods in Running state does not mean tasks succeed \u2014 WideOrbit showed pods healthy while tasks kept failing.",
+      "A recurring identical-looking alert on the same engine can have a DIFFERENT root cause on a later occurrence (WideOrbit's alert re-fired for an unrelated core DB partition-write bug, VE-23618, distinct from the original VE-26846 cause) \u2014 check the current error signature, don't assume 'same alert = same cause'.",
+      "A merged/reverted fix does not mean the alert stops \u2014 check deployment status to the specific cluster, not just PR/merge status.",
+      "A reported failure reason can be wrong at face value (Podcast Adapter reported 'connection' failures for feeds it had actually downloaded successfully).",
+      "Engine ownership is not documented anywhere obvious \u2014 expect the first (or second) person @-mentioned to disclaim ownership before the real owner is found.",
+      "Silencing an alert requires the code/engine owner's explicit sign-off tied to a specific known cause \u2014 a blanket request to silence was explicitly refused by an on-call engineer while the underlying fix still hadn't deployed."
+    ],
+    "escalation": "The on-call engineer always posts the Edge UI diagnosis first (engine name, failure %, error type, raw ETGN JSON, log zips) before pulling anyone in. Who gets @-mentioned depends entirely on which engine is failing and is tribal knowledge, not documented: Quynh Dang / Cameron Chunn for realtime/core engine internals (SI2 Playback); an ACI-owning chain (Tim Camara -> Alyssa Clemson -> David Sypien -> Khuong Truong) for WideOrbit Traffic; the POPS team + Bob Klaas's Engine team for Podcast Adapter data-source tickets; the flow's actual auth owner (e.g. Sven Peterson) for Automate/THEFA-style flows. Escalation commonly bounces through several names before landing on the right owner.",
+    "known_root_causes": [
+      {
+        "error_code": "bad_data.ETGN013 (writingStreamFailed)",
+        "engine": "SI2 Playback segment creator",
+        "cause": "The 'image2pipe fix' shipped in PR #10693 (VE-26837) broke ffmpeg streaming, causing 'SegmentIngestor: ffmpeg cmd failed: exit status 234 ... Conversion failed!' on essentially all segment-creation tasks on prd5001.",
+        "fix_reference": "Original regression: PR #10693 (VE-26837). Revert: PR #10709 (commit 2470d8ae0). Required deploying realtime v3.80.4.7386+ (v3.80.4.7385 still had the bug) as part of that week's Wednesday aiware release.",
+        "status": "resolved (fix merged; rollout confirmed) \u2014 but the alert kept re-firing for days until the deploy actually landed on prd5001",
+        "deploy_verification": "Automated \u2014 a CLI/GitHub Action already checks the deployed realtime build against known-fixed versions on each cluster. Do NOT propose 'verify the deployed version' as a manual proposed_action for this error_code; that check already runs without a human. Only raise it if you have reason to believe that automated check is unavailable, stale, or its result is unknown.",
+        "incident_refs": [
+          "#119665",
+          "#119666",
+          "#119673",
+          "#119674",
+          "#119677",
+          "#119683",
+          "#119722",
+          "#119800",
+          "#119824",
+          "#119869",
+          "#119877",
+          "#119955"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1787271593526449?thread_ts=1787271593.526449&cid=C01F810QM96",
+        "verified": true,
+        "confirmed_links": {
+          "PR #10693": "https://github.com/veritone/realtime/pull/10693"
+        },
+        "_links_note": "confirmed_links is the ONLY source of truth for which citations may be hyperlinked. PR #10709 is deliberately absent from confirmed_links: no URL for it was ever posted in the source Slack thread, so it must be cited as plain text ('PR #10709'), never linked, never guessed as github.com/.../pull/10709 even though that pattern would look plausible."
+      },
+      {
+        "error_code": "internal_error / ETGN667 / ETGN668 (Cannot POST /process)",
+        "engine": "THEFA Hourly Content Notifications",
+        "cause": "Scheduled job triggers an Automate/node-red flow running under Sven Peterson's auth; the node-red engine fails to start the internal flow ('Not found aiware-in node in the active flow') and a GraphQL not_found error occurs on a specific user object.",
+        "fix_reference": "",
+        "status": "unresolved/recurring \u2014 as of 2026-08-24 explicitly still failing with no fix confirmed",
+        "incident_refs": [
+          "#119776",
+          "#119893",
+          "#119357",
+          "#119966"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1786790492516499",
+        "verified": false
+      },
+      {
+        "error_code": "internal_error.ETGN888/ETGN668 (docling_serve.py returned empty array)",
+        "engine": "Docling Chunk Engine",
+        "cause": "PDF downloads and is read by Docling successfully, but the chunk-splitting step returns an empty/invalid array for certain documents, so the task fails with an internal error instead of producing chunks.",
+        "fix_reference": "",
+        "status": "recurring \u2014 same exact error signature recorded across Jan, Mar, May, Aug 2026 with no fix or ticket mentioned",
+        "incident_refs": [
+          "#119679"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1787298212651249?thread_ts=1787298212.651249&cid=C01F810QM96",
+        "verified": false
+      },
+      {
+        "error_code": "internal_error.ETGN888/ETGN668 (WideOrbit status-poll timeout)",
+        "engine": "WideOrbit Traffic",
+        "cause": "Confirmed on WideOrbit's (third-party) side: the engine reaches WideOrbit fine, gets In_Progress for ~3 minutes, then the status poll dies with a WebException timeout after 3 retries. Deterministic per-station: the same 69 stations fail 100% and the same 15 succeed 100% every day on the identical code path (independently verified verbatim from the thread).",
+        "fix_reference": "Jira VE-26846 filed to track with the vendor/SETA team; no code fix or PR confirmed merged.",
+        "status": "recurring/open \u2014 re-fired at least 14 times across 3+ weeks with no confirmed resolution",
+        "incident_refs": [
+          "#118154",
+          "#118233",
+          "#118549",
+          "#118620",
+          "#118699",
+          "#118874",
+          "#118973",
+          "#119179",
+          "#119258",
+          "#119446",
+          "#119459",
+          "#119827",
+          "#119884",
+          "#119954"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1785840930320989?thread_ts=1785840930.320989&cid=C01F810QM96",
+        "verified": true
+      },
+      {
+        "error_code": "unknown (core writes jobs/tasks to parent table instead of weekly partition)",
+        "engine": "multiple engines (surfaced inside the WideOrbit thread, not WideOrbit-specific)",
+        "cause": "Core was writing some jobs/tasks to the parent DB table instead of the correct weekly partition, so downstream systems couldn't upload results and those tasks failed with Error Type 'unknown'. 1,872 tasks created Aug 14-16 stuck retrying, causing repeated alert re-firing until cleared.",
+        "fix_reference": "VE-23618 (owned by Shuwei Lin) + VE-26841 for related error-reporting.",
+        "status": "identified with an owner and ticket, not confirmed fixed within these threads \u2014 alert will keep re-firing until cleared",
+        "incident_refs": [
+          "#119446",
+          "#119459"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1785840930320989?thread_ts=1785840930.320989&cid=C01F810QM96",
+        "verified": true
+      },
+      {
+        "error_code": "unknown.ETGN888 (engineHeartbeatFailureReport)",
+        "engine": "Translate Foreign Audio",
+        "cause": "Not diagnosed beyond the raw error in the thread \u2014 engine heartbeat reporting the underlying Transcription/Speaker Separation job failed or was canceled; no further root-cause investigation recorded.",
+        "fix_reference": "",
+        "status": "unresolved/open \u2014 thread ends after the error dump, no follow-up",
+        "incident_refs": [
+          "#119957"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1787658173989529?thread_ts=1787658173.989529&cid=C01F810QM96",
+        "verified": false
+      },
+      {
+        "error_code": "connection.ETGN056/ETGN046, api.ETGN048 (multiple distinct causes)",
+        "engine": "Podcast Adapter",
+        "cause": "Heterogeneous data/config issues, not an engine bug: RSS feed hosts timing out/erroring; GraphQL 'organizationId parameter is required' errors; sources owned by a different org than the scheduled job. The reported 'connection' failure reason is sometimes simply wrong for feeds that did download successfully.",
+        "fix_reference": "Jira VE-27389, VE-27390, VE-27391, VE-27392 filed and handed to POPS team + Bob Klaas's Engine team.",
+        "status": "open \u2014 latest occurrence (2026-08-26) ended in ticket creation, not resolution",
+        "incident_refs": [
+          "#110313",
+          "#110330"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1787690147444559?thread_ts=1787690147.444559&cid=C01F810QM96",
+        "verified": false
+      }
+    ],
+    "example_commands": [
+      "kubectl get pods -n aiware -l engine=<engine-id> --no-headers",
+      "kubectl logs <pod> -n aiware --previous | grep -iE 'panic|fatal|context deadline|OOM|connection refused'"
+    ],
+    "_note": "Built 2026-08-26 from a live investigation of 9 real #comms-noc threads (session cost ~$1.32). 'verified' = true means a second, independent read of the source thread confirmed the specific numeric/ticket claims verbatim; false means only the single research pass read it \u2014 treat those as high-confidence but not independently double-checked. Do not add an entry here without a real source_permalink read from an actual tool call."
+  }
+]

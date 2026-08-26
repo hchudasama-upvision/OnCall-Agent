@@ -1,15 +1,23 @@
 {
   "_comment": [
-    "Tools for the investigating model (see py/oncall_agent/investigate.py).",
-    "noc_slack   read-only Slack: what #comms-noc did for this alert before.",
-    "noc_grafana search dashboards, read what a panel queries, run PromQL, render a panel.",
+    "Tools for the investigating model (see py/oncall_agent/Agents/ — one folder",
+    "per specialist, assembled by Agents/registry.py).",
+    "noc_slack    read-only Slack: what #comms-noc did for this alert before. Every",
+    "             specialist gets this one — history/case grounding is universal.",
+    "noc_grafana  search dashboards, read what a panel queries, run PromQL, render a",
+    "             panel. Given to the Grafana/Metrics and Kubernetes specialists.",
+    "noc_edge_ui  aiWARE Edge/Controller task stats, task detail, screenshots, log",
+    "             download. Given to the Edge UI/engine specialist only.",
+    "noc_runscope one tool: look up the current run of the Runscope test matching an",
+    "             alert. Given to the Runscope specialist only.",
     "",
-    "Both are read-only apart from render_panel, which writes a PNG into dist/evidence.",
-    "Neither can post to Slack — the bot token does that, in our code, after validation.",
+    "All read-only apart from render_panel/capture_*_screenshot/download_*_logs,",
+    "which write evidence files into dist/evidence. None can post to Slack — the bot",
+    "token does that, in our code, after validation.",
     "",
     "\"command\": \"python\" is only a fallback for running `claude` by hand from an",
-    "activated venv. investigate.py rewrites this at run time to the interpreter the",
-    "agent itself is running under, so the servers always have their dependencies."
+    "activated venv. investigate.py/Agents/registry.py rewrite this at run time to the",
+    "interpreter the agent itself is running under, so servers always have their deps."
   ],
   "mcpServers": {
     "noc_slack": {
@@ -20,7 +28,19 @@
     },
     "noc_grafana": {
       "command": "python",
-      "args": ["-m", "oncall_agent.grafana_mcp_server"],
+      "args": ["-m", "oncall_agent.Agents.Grafana_Agent.server"],
+      "cwd": "py",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    "noc_edge_ui": {
+      "command": "python",
+      "args": ["-m", "oncall_agent.Agents.Edgeui_Agent.server"],
+      "cwd": "py",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    "noc_runscope": {
+      "command": "python",
+      "args": ["-m", "oncall_agent.Agents.Runscope_Agent.server"],
       "cwd": "py",
       "env": { "PYTHONUNBUFFERED": "1" }
     }

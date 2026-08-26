@@ -23,10 +23,11 @@ bootstrap()
 
 from dotenv import load_dotenv
 
-from oncall_agent import grafana, llm
-from oncall_agent.case_library import load_case_library
+from oncall_agent import llm
+from oncall_agent.Agents import registry as specialists
+from oncall_agent.Agents.Edgeui_Agent.edge_environments import load_edge_environments
+from oncall_agent.Agents.Grafana_Agent import grafana
 from oncall_agent.config import describe, load_config
-from oncall_agent.edge_environments import load_edge_environments
 from oncall_agent.evidence_panels import load_panel_map
 
 _STATUS = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
@@ -132,11 +133,21 @@ def check_investigation(config) -> None:
                "prefetch — we keyword-fetch #comms-noc threads and hand them over "
                "(needs .mcp.json plus Grafana or SLACK_USER_TOKEN for the tool path)")
 
-    # Prove the MCP server starts and speaks the protocol. It runs as a
+    # Prove each MCP server starts and speaks the protocol. Each runs as a
     # subprocess under the claude CLI, so an import error there would only
-    # ever show up mid-incident as "no tools".
+    # ever show up mid-incident as "no tools" for whichever specialist needed it.
     if not mcp_exists:
         return
+    for module_name, label in (
+        ("oncall_agent.slack_mcp_server", "slack mcp server"),
+        ("oncall_agent.Agents.Grafana_Agent.server", "grafana mcp server"),
+        ("oncall_agent.Agents.Edgeui_Agent.server", "edge ui mcp server"),
+        ("oncall_agent.Agents.Runscope_Agent.server", "runscope mcp server"),
+    ):
+        _check_mcp_server(module_name, label)
+
+
+def _check_mcp_server(module_name: str, label: str) -> None:
     import json as _json
     import subprocess
     handshake = _json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -144,7 +155,7 @@ def check_investigation(config) -> None:
     listing = _json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "oncall_agent.slack_mcp_server"],
+            [sys.executable, "-m", module_name],
             input=f"{handshake}\n{listing}\n", capture_output=True, text=True, timeout=30,
             cwd=str(Path(__file__).resolve().parent.parent),
             env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
@@ -155,11 +166,11 @@ def check_investigation(config) -> None:
             if payload.get("id") == 2:
                 names = [t["name"] for t in payload["result"]["tools"]]
         if names:
-            report("pass", "slack mcp server", f"responds with {len(names)} tools: {', '.join(names)}")
+            report("pass", label, f"responds with {len(names)} tools: {', '.join(names)}")
         else:
-            report("fail", "slack mcp server", f"no tool list returned: {proc.stderr[:120]}")
+            report("fail", label, f"no tool list returned: {proc.stderr[:120]}")
     except Exception as e:                          # noqa: BLE001
-        report("fail", "slack mcp server", f"{type(e).__name__}: {str(e)[:120]}")
+        report("fail", label, f"{type(e).__name__}: {str(e)[:120]}")
 
 
 def check_llm() -> None:
@@ -206,16 +217,25 @@ def check_panel_map() -> None:
         report("pass", "panel map", f"{mapped} alertname variant(s) mapped to panels")
     else:
         report("warn", "panel map", "config/panel_map.json is empty — no Grafana panels will attach "
-                                    "(fill it with `python -m oncall_agent.grafana --list-panels <uid>`)")
+                                    "(fill it with `python -m oncall_agent.Agents.Grafana_Agent.grafana --list-panels <uid>`)")
 
 
 def check_cases() -> None:
-    cases = load_case_library()
-    if cases.cases:
-        report("pass", "case library", f"{len(cases.cases)} case(s), "
-                                       f"{len(cases.known_alertnames)} alertname variant(s)")
-    else:
-        report("warn", "case library", "data/cases.json missing — triage loses its historical grounding")
+    # Each specialist owns its own data/cases.json now (2026-08-26) — check
+    # every one individually so a specialist quietly losing its case file
+    # doesn't hide behind the others still having theirs.
+    total = 0
+    for name, cfg in specialists.SPECIALISTS.items():
+        cases = cfg["case_library"]
+        total += len(cases.cases)
+        if cases.cases:
+            report("pass", f"{name} cases", f"{len(cases.cases)} case(s), "
+                                            f"{len(cases.known_alertnames)} alertname variant(s)")
+        else:
+            report("warn", f"{name} cases", f"Agents/.../data/cases.json missing or empty for "
+                                            f"{name!r} — that specialist loses its historical grounding")
+    if not total:
+        report("warn", "case library", "no specialist has any cases — triage loses its historical grounding")
 
 
 def check_edge() -> None:

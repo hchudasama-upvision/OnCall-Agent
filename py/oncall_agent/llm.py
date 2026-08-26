@@ -27,21 +27,54 @@ no-training tier and an explicit owner decision.
 Flags that matter for claude_cli, and why:
   --system-prompt (not --append-system-prompt) REPLACES Claude Code's
     coding-agent prompt, so the model gets only the NOC brief.
-  --allowed-tools ""  makes this pure text-in/text-out. Tool use, evidence
-    selection and remediation live in this repo's code, never in the model.
+  --tools ""  (NOT --allowed-tools/--allowedTools) is what actually strips
+    tool availability for pure text-in/text-out. --allowedTools only
+    pre-approves tools to skip the permission prompt — it does not remove
+    them from the model's context, so in a non-interactive -p run the model
+    can still see and attempt tools, get silently denied (no TTY to
+    approve), and waste effort on failed calls before answering. That was
+    the previous bug here: this file used --allowed-tools "" and got
+    "restricted but still tool-aware, sometimes-flaky" output instead of
+    clean text-only completion. --tools "" removes them from the session
+    entirely. Tool use, evidence selection and remediation live in this
+    repo's code, never in the model — verify with `claude --help` on your
+    installed version if CLI behavior ever seems to drift from this.
+  --effort  set as high as the installed CLI supports (see
+    CLAUDE_CLI_EFFORT below) — triage quality tracks reasoning depth far
+    more than it tracks anything prompt wording can buy you.
   cwd=tempdir  stops the CLI auto-discovering THIS repo's CLAUDE.md into
     every triage.
   Never add --bare: it forces ANTHROPIC_API_KEY auth and ignores the OAuth
     session, defeating the point of this provider.
+
+On "creative": incident triage wants maximum *reasoning depth*, not output
+variance — those are different knobs. --effort (claude_cli) and thinking
+budget (anthropic) buy you the former. Temperature buys you the latter, and
+turning it up on root-cause analysis mostly buys you confident-sounding
+wrong guesses. It's exposed below for the anthropic path because it was
+asked for, defaulted low, and logged when raised so a bad triage is
+traceable back to the setting that produced it.
 """
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "claude_cli").lower()
 
 CLAUDE_CLI_MODEL = os.environ.get("CLAUDE_CLI_MODEL", "opus")
-CLAUDE_CLI_EFFORT = os.environ.get("CLAUDE_CLI_EFFORT", "low")
+# Highest reasoning depth the CLI exposes. Observed valid values: low, medium,
+# high, xhigh, max — "max" has been gated to Opus-class models in some CLI
+# versions. Confirm against `claude --help` on your installed version; if
+# "max" is rejected there, drop to "xhigh" or "high".
+CLAUDE_CLI_EFFORT = os.environ.get("CLAUDE_CLI_EFFORT", "max")
 CLAUDE_CLI_TIMEOUT = int(os.environ.get("CLAUDE_CLI_TIMEOUT", "300"))
+
 ANTHROPIC_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5")
-MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "8000"))
+MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "16000"))
+# Extended thinking budget in tokens for the anthropic provider — the API
+# equivalent of --effort. 0 disables thinking entirely. Must stay below
+# MAX_TOKENS (the API requires max_tokens > thinking budget).
+ANTHROPIC_THINKING_BUDGET = int(os.environ.get("ANTHROPIC_THINKING_BUDGET", "10000"))
+# Real creativity/variance knob, anthropic path only. Default low on purpose —
+# see module docstring. Raise deliberately, not as a default-on "smarter" dial.
+ANTHROPIC_TEMPERATURE = float(os.environ.get("ANTHROPIC_TEMPERATURE", "0.2"))
 
 
 def model_label() -> str:
@@ -63,7 +96,7 @@ def _claude_cli(system: str, user_msg: str) -> str:
         [claude_binary(), "-p", user_msg,
          "--output-format", "json",
          "--system-prompt", system,
-         "--allowed-tools", "",
+         "--tools", "",
          "--model", CLAUDE_CLI_MODEL,
          "--effort", CLAUDE_CLI_EFFORT],
         capture_output=True, text=True,
@@ -83,12 +116,21 @@ def _anthropic(system: str, user_msg: str) -> str:
     from anthropic import Anthropic
 
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    resp = client.messages.create(
+    kwargs = dict(
         model=ANTHROPIC_MODEL,
         max_tokens=MAX_TOKENS,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
     )
+    if ANTHROPIC_THINKING_BUDGET > 0:
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": ANTHROPIC_THINKING_BUDGET}
+        # Temperature must be left at its API default (1) when thinking is
+        # enabled — the API rejects a custom temperature alongside thinking.
+        # Depth (thinking) wins over variance (temperature) here on purpose.
+    else:
+        kwargs["temperature"] = ANTHROPIC_TEMPERATURE
+
+    resp = client.messages.create(**kwargs)
     return "".join(b.text for b in resp.content if b.type == "text")
 
 

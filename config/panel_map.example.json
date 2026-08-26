@@ -2,7 +2,7 @@
   "_comment": [
     "Shape reference only — these uids/ids are from the noc-ai-lab prototype's",
     "local TestData dashboard, NOT from thanos-grafana. Copy the SHAPE, discover",
-    "the real ids with `python -m oncall_agent.grafana --list-panels <uid>`."
+    "the real ids with `python -m oncall_agent.Agents.Grafana_Agent.grafana --list-panels <uid>`."
   ],
   "dashboard_uid": "noc-ai-lab",
   "default_from": "now-6h",

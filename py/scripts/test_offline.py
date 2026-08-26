@@ -275,12 +275,77 @@ def test_routing() -> None:
           config.investigation_mode(False) == "prefetch")
 
 
+def test_specialist_routing() -> None:
+    from oncall_agent.Agents.MASTER_Agent.router import route_alert
+    from oncall_agent.types import ParsedAlert
+
+    group("specialist routing (domain-expert dispatch)")
+
+    def mk(alert_name: str) -> ParsedAlert:
+        return ParsedAlert(source="victorops", kind="incident", raw_text=alert_name,
+                           alert_name=alert_name, incident_name=alert_name)
+
+    cases = [
+        ("Engine failure rate above 15%", "edge_ui"),
+        ("Engine failure rate 100% for all engine in every Environment", "edge_ui"),
+        ("KubePodsNotReady", "kubernetes"),
+        ("KubePodCrashLooping", "kubernetes"),
+        ("KubePersistentVolumeFillingUp", "kubernetes"),
+        ("Track Job", "runscope"),
+        ("Site DNS Valdation", "runscope"),
+        ("DiskSpaceUtilizationCritical", "grafana_metrics"),
+        ("VM Disk Usage above 90% - Prometheus", "grafana_metrics"),
+        ("AlbUnhealthyHostCritical", "grafana_metrics"),
+        ("Some totally unrecognized alert type", None),
+    ]
+    for alert_name, expected in cases:
+        got = route_alert(mk(alert_name))
+        check(f"{alert_name!r} routes to {expected}", got == expected, f"got {got!r}")
+
+    from oncall_agent.Agents.registry import SPECIALISTS
+    for name in ("edge_ui", "kubernetes", "grafana_metrics", "runscope"):
+        check(f"specialist {name!r} is registered with tools + a system prompt",
+              name in SPECIALISTS and SPECIALISTS[name]["tools"] and SPECIALISTS[name]["system_prompt"])
+    check("every specialist gets the Slack tools too (universal history grounding)",
+          all(any(t.startswith("mcp__noc_slack__") for t in cfg["tools"])
+              for cfg in SPECIALISTS.values()))
+    check("edge_ui specialist has no tools from other domains",
+          not any("noc_grafana" in t or "noc_runscope" in t for t in SPECIALISTS["edge_ui"]["tools"]))
+    for name in ("edge_ui", "kubernetes", "grafana_metrics", "runscope"):
+        check(f"specialist {name!r} has its own case_library",
+              "case_library" in SPECIALISTS[name] and SPECIALISTS[name]["case_library"] is not None)
+
+    # --- agent-wise memory round trip (write, read back, then clean up) ---
+    from oncall_agent import agent_memory
+    from oncall_agent.types import Decision
+
+    _MEM_TEST_FP = "__test_offline_fingerprint__"
+    _mem_path = agent_memory._memory_path("edge_ui", _MEM_TEST_FP)
+    _mem_path.unlink(missing_ok=True)
+    try:
+        check("no memory yet for a fresh fingerprint",
+              agent_memory.recall("edge_ui", _MEM_TEST_FP) == [])
+        fake_alert = mk("Engine failure rate above 15%")
+        fake_decision = Decision(should_post=True, reasoning="test", root_cause_narrative="test cause",
+                                 owning_team_mention="@team", posts=[])
+        agent_memory.remember("edge_ui", _MEM_TEST_FP,
+                              agent_memory.build_record(fake_alert, fake_decision, _MEM_TEST_FP))
+        recalled = agent_memory.recall("edge_ui", _MEM_TEST_FP)
+        check("memory round-trips: one record written is one record recalled",
+              len(recalled) == 1 and recalled[0]["root_cause_narrative"] == "test cause")
+        check("format_memory renders written records, not the empty-case message",
+              "test cause" in agent_memory.format_memory(recalled))
+        check("format_memory labels a genuinely empty history as empty",
+              "no memory yet" in agent_memory.format_memory([]))
+    finally:
+        _mem_path.unlink(missing_ok=True)
+
+
 # --------------------------------------------------------------- formatting
 
 def test_formatting() -> None:
     from oncall_agent.alert_parser import parse_alert_message, to_victorops_incident
     from oncall_agent.slack_blocks import SECTION_LIMIT, TEXT_LIMIT, fallback_text, sections
-    from oncall_agent.case_library import load_case_library
     from oncall_agent.evidence_panels import PanelMap, load_panel_map
 
     group("formatting, panel map, case library")
@@ -320,11 +385,21 @@ def test_formatting() -> None:
     check("unmapped alert yields no panels", panel_map.specs_for("Nothing") == [])
     check("shipped panel map loads", load_panel_map() is not None)
 
-    cases = load_case_library()
-    check("case library loaded", len(cases.cases) > 0, f"{len(cases.cases)} cases")
+    from oncall_agent.handler import CASES
+
+    check("merged case library loaded", len(CASES.cases) > 0, f"{len(CASES.cases)} cases")
     check("case fingerprinting works",
-          cases.fingerprint("[FIRING:2] aiw-prd5001 - KubePersistentVolumeFillingUp (x)")
+          CASES.fingerprint("[FIRING:2] aiw-prd5001 - KubePersistentVolumeFillingUp (x)")
           == "KubePersistentVolumeFillingUp")
+
+    from oncall_agent.Agents import registry as specialists_reg
+
+    check("every specialist's own case library is non-empty",
+          all(cfg["case_library"].cases for cfg in specialists_reg.SPECIALISTS.values()),
+          {k: len(v["case_library"].cases) for k, v in specialists_reg.SPECIALISTS.items()})
+    check("merged CASES equals the sum of every specialist's own cases",
+          len(CASES.cases) == sum(len(cfg["case_library"].cases)
+                                  for cfg in specialists_reg.SPECIALISTS.values()))
 
 
 # ---------------------------------------------------------------------- mcp
@@ -367,10 +442,42 @@ def test_mcp_server() -> None:
     check("tools/call returns content",
           "C909ZH4ET" in json.dumps(responses.get(3, {}).get("result", {})))
 
+    group("edge ui / runscope mcp servers (protocol only, no live calls)")
+    listing_only = "\n".join([
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"protocolVersion": "2024-11-05", "capabilities": {}}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    ]) + "\n"
+    for module_name, expected_min_tools in (
+        ("oncall_agent.Agents.Edgeui_Agent.server", 9),
+        ("oncall_agent.Agents.Runscope_Agent.server", 1),
+    ):
+        proc = subprocess.run(
+            [sys.executable, "-m", module_name],
+            input=listing_only, capture_output=True, text=True, timeout=60,
+            cwd=py_dir, env={"PATH": "/usr/bin:/bin", "PYTHONPATH": py_dir,
+                             "HOME": str(Path.home())},
+        )
+        tools = []
+        for line in proc.stdout.splitlines():
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            if payload.get("id") == 2:
+                tools = [t["name"] for t in payload["result"]["tools"]]
+        check(f"{module_name} lists at least {expected_min_tools} tool(s)",
+              len(tools) >= expected_min_tools, f"got {tools}")
+        check(f"{module_name} exposes no write/delete/restart tool",
+              not any(w in t for t in tools for w in
+                     ("delete", "restart", "scale", "resize", "post", "send")),
+              f"got {tools}")
+
 
 def main() -> int:
     print("oncall-agent offline tests (no credentials, no network)")
-    for suite in (test_parser, test_guardrails, test_routing, test_formatting, test_mcp_server):
+    for suite in (test_parser, test_guardrails, test_routing, test_specialist_routing,
+                 test_formatting, test_mcp_server):
         try:
             suite()
         except Exception as e:                      # noqa: BLE001 — report, keep going

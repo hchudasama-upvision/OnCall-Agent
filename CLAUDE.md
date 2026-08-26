@@ -23,8 +23,10 @@ decisions and constraints that are **not** visible in the code.
    alert type needed a human to re-derive it by hand, and a variable that
    silently matched nothing produced a green "N/A" gauge nobody caught until
    it was in the incident thread. Tools give the model the feedback loop a
-   human has. `data/cases.json` says WHAT to do for an alert type;
-   `panel_map.json` is now only a hint for dashboards already pinned.
+   human has. Each specialist's own `Agents/<Name>/data/cases.json` (split
+   from a single `data/cases.json` on 2026-08-26, see below) says WHAT to do
+   for an alert type; `panel_map.json` is now only a hint for dashboards
+   already pinned.
 
    Still never the model's: paging, severity, or executing anything.
 2. **Never fabricate.** `decide_resolution.py` refuses to post any URL that is
@@ -59,8 +61,9 @@ decisions and constraints that are **not** visible in the code.
 Three lineages merged here:
 
 - **This repo, before 2026-08-24** — a TypeScript engine-failure pipeline
-  (`src/`), rewritten in Python under `py/`. The TS tree is superseded and
-  left in place; do not extend it.
+  (`src/`), rewritten in Python under `py/`. The TS tree was superseded and
+  removed 2026-08-26 (briefly archived under `legacy/` first, then deleted
+  outright — it's in git history if anyone ever needs it back).
 - **The 2026-08-24 architecture pivot** — root-cause narrative, escalation
   routing and message structure moved out of a hardcoded template
   (`composer.ts`, `suggestOwningTeam`) into an LLM decision step grounded in
@@ -107,6 +110,37 @@ Three lineages merged here:
   thanos-grafana carries many near-identical per-cluster dashboard copies, so
   everything except the engine-failure dashboard is deliberately unmapped
   until someone who knows the cluster confirms it.
+- **Domain-specialist agents, one folder each (2026-08-24/26).** A single
+  generalist juggling Slack + Grafana + Edge UI tools for every alert type
+  produced noticeably less sharp results than a human specialist would —
+  the owner's read, confirmed once specialists shipped (autonomous engine
+  discovery, correct dynamic windows, a Runscope staleness catch, none of
+  which the generalist did). `Agents/MASTER_Agent/router.py` is a
+  deterministic (not LLM) master router — alert type is almost always
+  unambiguous from its own name, so spending a model call to classify it
+  would be pure cost. Each `Agents/<Name>/` folder owns everything specific
+  to that domain: its MCP server where it has one, its system prompt, and —
+  since 2026-08-26 — its own `data/cases.json`, split from the single
+  original file (all 12 cases mapped cleanly to exactly one specialist).
+  `case_library.py` stayed generic infrastructure (loads/matches ANY case
+  file); `handler.py`'s merged `CASES` exists ONLY for fingerprinting before
+  a specialist is even chosen and for the generalist fallback — a
+  specialist's own investigation always uses its own agent's case library,
+  never the merged one, so a Kubernetes case can never end up grounding an
+  Edge UI decision by fingerprint coincidence.
+- **Agent-wise write-back memory (2026-08-26), `agent_memory.py`.** The
+  case library is curated once by a human and goes stale; nothing fed the
+  agent's own past real conclusions back to it. Each specialist now writes
+  a compact, already-validated record (root cause, owning team, should_post)
+  after every investigation, keyed by (specialist, alert fingerprint), under
+  `.state/memory/` — runtime state, not source-controlled, same tier as
+  `.state/audit/`. The next investigation of that exact alert type gets its
+  last few real outcomes back in a clearly separate, clearly-labeled prompt
+  section (never merged into the case-library text) with the same
+  verify-don't-trust framing as a case-library entry: a memory can be stale
+  or simply wrong, and the model is told to check current evidence before
+  repeating it. Only written after `_validate()` passes, so a failed run is
+  never memorized as if it were a finding.
 
 ## Traps already hit — do not re-introduce
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 """
-The historical case library: 10 alert-type cases harvested from ~30 real
+The historical case library: 12 alert-type cases harvested from ~30 real
 VictorOps incident threads in #comms-noc and sanitized (no real IPs,
 hostnames, instance ids, tokens, employee or customer names). Ported from the
 noc-ai-lab prototype, where it was the crown jewel of the triage quality.
@@ -19,9 +19,19 @@ occurrences_observed, typical_resolution_minutes, diagnosis_steps,
 resolution_steps, gotchas, escalation, example_commands. The gotchas encode
 what a runbook never says out loud (e.g. "reboot, don't restart nfs-server —
 D-state processes never clear").
-"""
 
-_DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "cases.json"
+Ownership (2026-08-26): there is no single data/cases.json anymore. Every
+case belongs to exactly one specialist and lives in that specialist's own
+Agents/<Name>/data/cases.json (Grafana_Agent's resource-alert cases live one
+level deeper, in Agents/Grafana_Agent/grafana_metrics/data/cases.json — see
+that folder for why). This module stays domain-agnostic infrastructure: it
+knows how to load and query A case file, not which one. Each agent's own
+prompt.py loads its own file and is the source of truth for what that agent
+knows; load_merged() below exists ONLY for the two genuinely cross-domain
+callers — fingerprinting before routing is known, and the generalist
+fallback for alert types no specialist claims — neither of which can know in
+advance which single agent's data applies.
+"""
 
 
 def _case_names(case: dict) -> set:
@@ -86,7 +96,23 @@ class CaseLibrary:
         return sorted(keywords)
 
 
-def load_case_library(path: Path = _DATA_PATH) -> CaseLibrary:
+def load_case_library(path: Path) -> CaseLibrary:
+    """Load ONE agent's own case file. There is no default path — a caller
+    that doesn't know which agent it means shouldn't silently get one."""
     if not path.exists():
         return CaseLibrary([])
     return CaseLibrary(json.loads(path.read_text()))
+
+
+def load_merged(paths: List[Path]) -> CaseLibrary:
+    """Every agent's cases in one library, for the two callers that
+    legitimately need to see across all of them: fingerprinting an alert
+    before routing has picked a specialist, and the generalist fallback for
+    an alert type no specialist claims. NOT for a specialist's own prompt —
+    that should only ever see its own agent's cases (its own
+    Agents/<Name>/data/cases.json), not a sibling's."""
+    cases: List[dict] = []
+    for path in paths:
+        if path.exists():
+            cases.extend(json.loads(path.read_text()))
+    return CaseLibrary(cases)

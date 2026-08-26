@@ -16,6 +16,25 @@ class VictorOpsIncident:
 
 
 @dataclass
+class PlannedPost:
+    text: str
+    evidence_keys: List[str]
+
+
+@dataclass
+class Decision:
+    should_post: bool
+    reasoning: str
+    root_cause_narrative: str
+    owning_team_mention: str
+    posts: List[PlannedPost]
+    # A state-changing step the agent believes is needed but must NOT perform.
+    # {"summary", "command", "risk"} or None. Posted for a human to approve;
+    # nothing in this repo can execute it.
+    proposed_action: Optional[dict] = None
+
+
+@dataclass
 class EdgeUiTaskEvidence:
     engine_name: str
     engine_id: str

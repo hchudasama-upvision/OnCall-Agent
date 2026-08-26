@@ -151,7 +151,7 @@ python py/scripts/check_setup.py      # what this machine can actually reach
 ```
 
 > The package lives under `py/`, not at the repo root. `pip install -e .` is
-> what makes `python -m oncall_agent.grafana` work from any directory. Without
+> what makes `python -m oncall_agent.Agents.Grafana_Agent.grafana` work from any directory. Without
 > it you must prefix those commands with `PYTHONPATH=py`. The
 > `py/scripts/*.py` entry points work either way — they put `py/` on the path
 > themselves.
@@ -176,9 +176,9 @@ assertion in it is a bug that shipped once.
 ```bash
 python py/scripts/check_setup.py                    # every dependency, PASS/WARN/FAIL
 python -m oncall_agent.slack_mcp_server --selftest  # names the exact Slack scopes you have
-python -m oncall_agent.grafana --check              # reachability, token, renderer
-python -m oncall_agent.grafana --list-dashboards engine
-python -m oncall_agent.grafana --render <uid>:<id> -o /tmp/p.png
+python -m oncall_agent.Agents.Grafana_Agent.grafana --check              # reachability, token, renderer
+python -m oncall_agent.Agents.Grafana_Agent.grafana --list-dashboards engine
+python -m oncall_agent.Agents.Grafana_Agent.grafana --render <uid>:<id> -o /tmp/p.png
 ```
 
 (The `python -m` commands need `pip install -e .` or a `PYTHONPATH=py` prefix.)
@@ -366,7 +366,8 @@ five minutes since at least July).
 | `.env` | every credential and every toggle — see `.env.example` |
 | `config/panel_map.json` | alert type → Grafana dashboard + panel ids |
 | `config/suppression.json` | chronic fingerprints to never investigate |
-| `data/cases.json` | 10 sanitized cases from ~30 real incident threads |
+| `config/specialist_routing.json` | alert type → specialist agent (master router) |
+| `py/oncall_agent/Agents/<Name>/data/cases.json` | each specialist's own sanitized cases from ~30 real incident threads (12 total, split by domain) |
 
 ### Adding Grafana panels for an alert type
 
@@ -374,9 +375,9 @@ Panel ids are discovered, never guessed — a wrong id renders a real-looking
 picture of the wrong graph.
 
 ```bash
-python -m oncall_agent.grafana --check              # reachability, token, renderer
-python -m oncall_agent.grafana --list-dashboards engine
-python -m oncall_agent.grafana --list-panels <dashboard_uid>
+python -m oncall_agent.Agents.Grafana_Agent.grafana --check              # reachability, token, renderer
+python -m oncall_agent.Agents.Grafana_Agent.grafana --list-dashboards engine
+python -m oncall_agent.Agents.Grafana_Agent.grafana --list-panels <dashboard_uid>
 ```
 
 Then add an entry to `config/panel_map.json` (see `panel_map.example.json`
@@ -408,32 +409,59 @@ with the alert's `aiw-xxx` environment key.
 py/oncall_agent/
   listener.py              watch #alerts-devops (socket mode or polling)
   alert_parser.py          the five #alerts-devops bot formats → ParsedAlert
-  handler.py               dedupe, suppress, route, post
-  investigate.py           tool-driven investigation + no-fabrication validation
-  slack_mcp_server.py      read-only Slack MCP server for headless claude
+  handler.py               dedupe, suppress, route (via Agents/MASTER_Agent), post
+  investigate.py           shared tool-call machinery + no-fabrication validation
+                           + the generalist fallback for alert types no
+                           specialist claims
+  agent_memory.py          per-specialist write-back memory: what an agent
+                           actually found the last few times it saw this
+                           exact alert type (.state/memory/<specialist>/)
+  case_library.py          generic loader/matcher — each specialist's OWN
+                           data/cases.json is the actual data (see below)
+  slack_mcp_server.py      read-only Slack MCP server for headless claude —
+                           shared by every specialist
+  slack_history.py / slack_post.py / slack_blocks.py
   config.py                .env → AgentConfig
-  engine_failure_pipeline.py   the Edge UI evidence pipeline
-  live_edge_ui_client.py   Edge UI task evidence (stats, failed task, org)
-  edge_api.py / edge_environments.py / engine_task_stats.py
-  screenshot.py            Playwright capture of Edge UI + log downloads
-  decide_resolution.py     schema-validated, guardrailed decision for engine failures
-  triage.py                the 7-section report for every other alert type
-  llm.py                   claude_cli (default) / anthropic
-  case_library.py          data/cases.json matching
-  slack_history.py         read #comms-noc resolutions + #alerts-devops context
-  slack_post.py            post the decided thread
-  slack_blocks.py          Slack size limits and block shaping
-  grafana.py               Grafana API: search, panels, render, discovery CLI
-  grafana_capture.py       headless-browser panel capture (renderer fallback)
   evidence_panels.py       panel map → PNGs → thread
+  triage.py / llm.py       legacy no-tools generalist path — superseded by
+                           investigate.py's tool-using generalist, kept
+                           unused as a rollback
+  Agents/                  one folder per domain specialist (2026-08-26) —
+                           each owns its own tools, system prompt, and case
+                           library; only Slack + the deterministic router
+                           are shared
+    MASTER_Agent/          router.py — deterministic, gets the alert,
+                           decides which specialist handles it
+    registry.py            assembles Agents/<Name>/ into SPECIALISTS and
+                           runs the `claude -p` subprocess call per domain
+    Edgeui_Agent/           engine-failure specialist: server.py (Edge UI
+                           MCP tools), prompt.py, data/cases.json, plus the
+                           old deterministic pipeline (engine_failure_pipeline.py
+                           /decide_resolution.py/live_edge_ui_client.py/
+                           edge_api.py/edge_environments.py/
+                           engine_task_stats.py/screenshot.py) kept as a
+                           rollback, unused
+    Grafana_Agent/          server.py (Grafana MCP tools: search/describe/
+                           query/render), grafana.py, grafana_capture.py —
+                           shared by K8S_Agent and grafana_metrics below
+      grafana_metrics/      resource-alert specialist: prompt.py + its own
+                           data/cases.json (disk/memory/ALB/API-rate cases)
+    K8S_Agent/              Kubernetes specialist: prompt.py + its own
+                           data/cases.json (Prometheus/kube-state-metrics
+                           via Grafana_Agent's tools — no kubectl yet)
+    Runscope_Agent/         synthetic-test specialist: server.py, prompt.py,
+                           runscope_client.py, data/cases.json
 py/scripts/
   run_listener.py          main entry point
-  run_live_test.py         manual single-incident run
+  run_live_test.py         manual single-incident run (old deterministic
+                           Edge UI pipeline)
+  replay_alert.py          manual single-incident run through the REAL
+                           router + specialist dispatch (handler.handle_alert)
   post_decision.py         post an investigated thread from a decision JSON
-  check_setup.py           preflight
+  check_setup.py           preflight — checks every specialist's MCP server
+                           and case library individually
 fixtures/
   alerts-devops-real.json  real captured alert cards — the parser regression set
-src/                       legacy TypeScript implementation, superseded by py/
 ```
 
 `DESIGN.md` is the discovery document behind all of this: current-state

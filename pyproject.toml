@@ -21,10 +21,10 @@ dependencies = [
 anthropic = ["anthropic"]
 
 # The package lives under py/ rather than at the repo root, because the root
-# also holds the superseded TypeScript tree (src/), the config/ and data/ files
-# the agent reads at runtime, and DESIGN.md. `pip install -e .` is what lets
-# `python -m oncall_agent.grafana` work from any directory instead of only
-# from py/ or with PYTHONPATH=py set.
+# also holds the config/ and data/ files the agent reads at runtime and
+# DESIGN.md. `pip install -e .` is what lets
+# `python -m oncall_agent.Agents.Grafana_Agent.grafana` work from any
+# directory instead of only from py/ or with PYTHONPATH=py set.
 [tool.setuptools]
 package-dir = { "" = "py" }
 

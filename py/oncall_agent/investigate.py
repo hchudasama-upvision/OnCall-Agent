@@ -8,9 +8,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from . import grafana_mcp_server as grafana_mcp
-from .decide_resolution import Decision, PlannedPost
-from .types import ParsedAlert
+from .Agents.Grafana_Agent import server as grafana_mcp
+from .agent_memory import format_memory
+from .types import Decision, ParsedAlert, PlannedPost
 
 """
 Investigation by tool use: Claude reads #comms-noc itself.
@@ -298,7 +298,8 @@ def format_cases(cases: Optional[List[dict]]) -> str:
 
 def build_prompt(alert: ParsedAlert, evidence_keys: List[str],
                  evidence_descriptions: Optional[Dict[str, str]] = None,
-                 past_cases: Optional[List[dict]] = None) -> str:
+                 past_cases: Optional[List[dict]] = None,
+                 memory_records: Optional[List[dict]] = None) -> str:
     link_line = (
         f"Incident link (the ONLY link you may use for this incident): {alert.incident_url}"
         if alert.incident_url
@@ -359,6 +360,14 @@ label quirk, the usual cause, who owns it. VERIFY before relying on it — a
 case can be stale, and the live tools are the authority. If it turns out to be
 wrong, say so in your reasoning so a human can correct the entry.
 {format_cases(past_cases)}
+
+YOUR OWN MEMORY OF PAST INVESTIGATIONS OF THIS EXACT ALERT TYPE (real outputs
+YOU produced on prior runs — not curated by a human, not verified since they
+were written). Same rule as the case library: a head start, not a fact.
+Conditions drift between incidents — a root cause from last time may not be
+this time's, an owning_team_mention may be stale. VERIFY against what your
+tools show NOW before repeating anything below.
+{format_memory(memory_records)}
 
 Investigate with the Slack tools first — how has this alert type been handled in
 #comms-noc before, and what was actually done? Then produce the decision."""
@@ -427,7 +436,7 @@ def draft_from_context(
     if output is None:
         raise RuntimeError(f"No structured output returned: {proc.stdout[:400]}")
 
-    decision, prior = _validate(output, alert, prompt, evidence_keys)
+    decision, prior = _validate(output, alert, prompt, evidence_keys, past_cases)
     return Investigation(
         decision=decision, prior_incidents=prior, tools_used=[],
         sources_seen=len(getattr(history, "threads", []) or []),
@@ -574,16 +583,33 @@ def _normalize_url(url: str) -> str:
     return url.rstrip(".,;:!?)]}>|\"'").rstrip("/")
 
 
-def _allowed_urls(alert: ParsedAlert, corpus: str) -> Set[str]:
+def _allowed_urls(alert: ParsedAlert, corpus: str, past_cases: Optional[List[dict]] = None,
+                  memory_records: Optional[List[dict]] = None) -> Set[str]:
     """Every URL the model was legitimately shown."""
     allowed = set(_URL.findall(alert.raw_text)) | set(_URL.findall(corpus))
     if alert.incident_url:
         allowed.add(alert.incident_url)
+    # Case-library URLs (source_permalink, confirmed_links, or any real link
+    # embedded in fix_reference) are real — captured from an actual tool call
+    # when the case was built, see each agent's data/cases.json's _note — so
+    # citing one is not fabrication. Without this, a matching
+    # known_root_causes entry's own link would be rejected exactly like an
+    # invented one.
+    for case in past_cases or []:
+        for cause in case.get("known_root_causes") or []:
+            allowed |= set(_URL.findall(json.dumps(cause)))
+    # Memory records are this agent's own PAST validated output — any URL in
+    # one already passed this exact check when it was first produced, so
+    # re-citing it now (e.g. the same confirmed_links PR link) is not a new
+    # fabrication either.
+    for record in memory_records or []:
+        allowed |= set(_URL.findall(json.dumps(record)))
     return {_normalize_url(u) for u in allowed}
 
 
 def _validate(output: dict, alert: ParsedAlert, corpus: str,
-              evidence_keys: List[str]) -> tuple:
+              evidence_keys: List[str], past_cases: Optional[List[dict]] = None,
+              memory_records: Optional[List[dict]] = None) -> tuple:
     allowed_keys = set(evidence_keys)
     posts: List[PlannedPost] = []
     for raw_post in output.get("posts", []):
@@ -597,7 +623,7 @@ def _validate(output: dict, alert: ParsedAlert, corpus: str,
     # convenience: with "https://veritone.atlassian.net/" anywhere in the
     # corpus, a startswith() check authorizes ".../browse/VE-99999" — a
     # fabricated ticket link wearing a real host.
-    allowed_urls = _allowed_urls(alert, corpus)
+    allowed_urls = _allowed_urls(alert, corpus, past_cases, memory_records)
     for post in posts:
         for raw_url in _URL.findall(post.text):
             url = _normalize_url(raw_url)
@@ -715,7 +741,7 @@ def investigate_alert(
     rendered = grafana_mcp.load_manifest(run_dir)
     evidence_files = {k: Path(v["path"]) for k, v in rendered.items()}
     decision, prior = _validate(structured, alert, corpus,
-                                evidence_keys + list(rendered))
+                                evidence_keys + list(rendered), past_cases)
     return Investigation(
         decision=decision,
         prior_incidents=prior,

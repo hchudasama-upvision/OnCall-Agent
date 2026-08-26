@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from . import grafana, grafana_capture
+from .Agents.Grafana_Agent import grafana, grafana_capture
 
 """
 Turns an alert fingerprint into rendered Grafana PNGs for the #comms-noc
@@ -317,6 +317,6 @@ def post_panels(
         client.chat_postMessage(
             channel=channel, thread_ts=thread_ts,
             text=":warning: No Grafana evidence panels could be rendered "
-                 f"({len(specs)} mapped). Check `python -m oncall_agent.grafana --check`.",
+                 f"({len(specs)} mapped). Check `python -m oncall_agent.Agents.Grafana_Agent.grafana --check`.",
         )
     return rendered

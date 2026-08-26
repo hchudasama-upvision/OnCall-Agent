@@ -9,15 +9,23 @@ from typing import Callable, List, Optional
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from . import evidence_panels, grafana, investigate as investigate_mod, llm, slack_blocks, triage as triage_mod
+from . import (
+    evidence_panels,
+    investigate as investigate_mod,
+    llm,
+    slack_blocks,
+    triage as triage_mod,
+)
+from .Agents import registry as specialists
+from .Agents.Edgeui_Agent.engine_failure_pipeline import run_engine_failure_pipeline
+from .Agents.Grafana_Agent import grafana
+from .Agents.MASTER_Agent import router
 from .alert_parser import (
-    is_engine_failure_rate,
     to_victorops_incident,
     window_minutes_from,
 )
-from .case_library import load_case_library
+from .case_library import CaseLibrary
 from .config import AgentConfig
-from .engine_failure_pipeline import run_engine_failure_pipeline
 from .slack_history import (
     HistoryFetchResult,
     fetch_channel_context,
@@ -45,7 +53,14 @@ The route is picked by code, not by the model, and so is every piece of
 evidence attached. The model writes narrative and routing recommendations.
 """
 
-CASES = load_case_library()
+# Every specialist's own case library, merged, for the two things that can't
+# know in advance which single agent's data applies: fingerprinting an alert
+# before routing has even picked a specialist, and the generalist fallback
+# for an alert type no specialist claims. A specialist's OWN investigation
+# uses only its own case_library (see _handle_specialist below) — never this
+# merged view.
+CASES = CaseLibrary([case for cfg in specialists.SPECIALISTS.values()
+                     for case in cfg["case_library"].cases])
 
 
 @dataclass
@@ -148,27 +163,35 @@ def handle_alert(
         alert.permalink = permalink_for(client, alert.channel_id or config.alerts_channel,
                                         alert.message_ts)
 
-    if is_engine_failure_rate(alert):
-        return _handle_engine_failure(alert, config, client, log)
-    if config.investigation_mode(investigate_mod.DEFAULT_MCP_CONFIG.exists(),
-                                grafana_configured=grafana.is_configured()) == "tools":
-        return _handle_tool_investigation(alert, config, client, log)
+    # Domain-specialist routing (2026-08-26): a deterministic router picks
+    # the specialist by alert type — Edge UI/engine, Kubernetes, Grafana/
+    # metrics, Runscope — each with its own focused tool surface and expert
+    # system prompt, instead of one generalist juggling every domain's tools
+    # at once. is_engine_failure_rate alerts are covered by the router too
+    # (it checks that first); the old deterministic Playwright pipeline
+    # (_handle_engine_failure/run_engine_failure_pipeline, still defined
+    # below) is kept but no longer called, as a rollback path until the new
+    # Edge UI specialist has proven out live. No routing match falls through
+    # to the generalist (_handle_generic_triage) unchanged.
+    specialist = router.route_alert(alert)
+    if specialist:
+        return _handle_specialist(alert, config, client, log, specialist)
     return _handle_generic_triage(alert, config, client, log)
 
 
-# ------------------------------------------------- investigation by tool use
+# ------------------------------------------------- investigation by specialist
 
-def _handle_tool_investigation(alert, config, client, log) -> HandledAlert:
-    """Claude reads #comms-noc itself, then we post what it drafted.
+def _handle_specialist(alert, config, client, log, specialist: str) -> HandledAlert:
+    """Dispatch to one domain specialist (Agents/<Name>/, assembled by
+    Agents/registry.py) — Claude reads #comms-noc AND that domain's own
+    tools itself, then we post what it drafted.
 
-    Evidence is still chosen here, not by the model: mapped Grafana panels are
-    rendered first and offered to it by key, exactly as in the engine-failure
-    path. The model decides what to SAY, never what to attach.
+    Evidence hints are still chosen here, not by the model: a mapped Grafana
+    panel is offered by key as a starting point (config/panel_map.json is
+    only a hint for dashboards someone has already pinned), same as before
+    this was split by domain.
     """
     fingerprint = alert.alert_name or CASES.fingerprint(alert.raw_text)
-    # No pre-rendered panels: the investigation picks and renders its own via
-    # the Grafana tools. config/panel_map.json is now only a hint for cases
-    # where someone has already pinned the right dashboard.
     specs = _panel_specs(alert, fingerprint, log)
     hint = ""
     if specs:
@@ -177,23 +200,27 @@ def _handle_tool_investigation(alert, config, client, log) -> HandledAlert:
                             for s in specs)
                 + ". Verify it still fits this alert before using it.")
 
-    cases = CASES.find(fingerprint)
-    log(f"tool investigation: fingerprint={fingerprint!r} cases={len(cases)} "
-        f"{'panel hint available' if specs else 'no panel hint — searching Grafana live'}")
+    # This specialist's OWN case library, not the merged CASES above — an
+    # edge_ui alert should never get grounded in a Kubernetes case just
+    # because both happen to share a fingerprint collision.
+    own_cases = specialists.SPECIALISTS[specialist]["case_library"]
+    cases = own_cases.find(fingerprint)
+    log(f"{specialist} specialist: fingerprint={fingerprint!r} cases={len(cases)} "
+        f"{'panel hint available' if specs else 'no panel hint'}")
     try:
-        result = investigate_mod.investigate_alert(
-            alert, panel_hint=hint, past_cases=CASES.find(fingerprint))
+        result = specialists.run_specialist(
+            alert, specialist, past_cases=cases, panel_hint=hint, fingerprint=fingerprint)
     except Exception as e:                          # noqa: BLE001 — one alert, not the daemon
-        log(f"investigation failed: {type(e).__name__}: {e}")
+        log(f"{specialist} investigation failed: {type(e).__name__}: {e}")
         # If the alert is already visible in the channel, silence reads as a
         # hung agent. Say plainly that the investigation failed so a human
         # picks the alert up instead of waiting on us.
         _post_failure_notice(config, client, alert, e, log)
-        return HandledAlert(alert=alert, route="investigation",
+        return HandledAlert(alert=alert, route=specialist,
                             reason=f"failed: {type(e).__name__}: {e}")
 
-    log(f"investigation used {len(result.tools_used)} tool call(s), rendered "
-        f"{len(result.evidence_files)} panel(s), grounded in "
+    log(f"{specialist}: used {len(result.tools_used)} tool call(s), produced "
+        f"{len(result.evidence_files)} evidence file(s), grounded in "
         f"{len(result.prior_incidents)} past thread(s), cost ${result.cost_usd:.3f}")
     _write_audit(config, alert, result, log)
 
@@ -202,13 +229,13 @@ def _handle_tool_investigation(alert, config, client, log) -> HandledAlert:
     if not (config.is_live and client):
         DryRunSlackPoster(log=log).post_decided_thread(
             to_victorops_incident(alert), decision, evidence_files)
-        return HandledAlert(alert=alert, route="investigation")
+        return HandledAlert(alert=alert, route=specialist)
 
     post_decided_thread(client, config.comms_channel, to_victorops_incident(alert),
                         decision, evidence_files, log=log,
                         thread_ts=alert.reply_in_thread_ts,
                         with_buttons=config.socket_mode)
-    return HandledAlert(alert=alert, route="investigation",
+    return HandledAlert(alert=alert, route=specialist,
                         thread_ts=alert.reply_in_thread_ts)
 
 

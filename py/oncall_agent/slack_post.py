@@ -4,8 +4,7 @@ from typing import Callable, Dict, List, Optional
 
 from slack_sdk import WebClient
 
-from .decide_resolution import Decision
-from .types import VictorOpsIncident
+from .types import Decision, VictorOpsIncident
 
 """
 Posts the LLM's decided thread to Slack. The top-level "Alert:" line stays

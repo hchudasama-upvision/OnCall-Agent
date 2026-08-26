@@ -19,14 +19,14 @@ stays plain, unlinked text).
 Evidence gathering, screenshots, and log download are fully deterministic
 (they gather facts, not judgment). Root-cause narrative, escalation-team
 routing, message structure/content, and whether to post at all are decided
-by an LLM (see oncall_agent/decide_resolution.py), grounded in real past
-#comms-noc resolutions of similar incidents plus this incident's real
-evidence — never a hardcoded template or heuristic.
+by an LLM (see oncall_agent/Agents/Edgeui_Agent/decide_resolution.py), grounded
+in real past #comms-noc resolutions of similar incidents plus this incident's
+real evidence — never a hardcoded template or heuristic.
 
 This script is the MANUAL entry point: you name the incident and engine. The
 same pipeline runs unattended off real #alerts-devops traffic via
 scripts/run_listener.py — both call
-oncall_agent.engine_failure_pipeline.run_engine_failure_pipeline().
+oncall_agent.Agents.Edgeui_Agent.engine_failure_pipeline.run_engine_failure_pipeline().
 """
 import os
 import re
@@ -41,8 +41,8 @@ bootstrap()
 from dotenv import load_dotenv
 from slack_sdk import WebClient
 
-from oncall_agent.engine_failure_pipeline import run_engine_failure_pipeline
-from oncall_agent.screenshot import MINUTE_WINDOW_PRESETS
+from oncall_agent.Agents.Edgeui_Agent.engine_failure_pipeline import run_engine_failure_pipeline
+from oncall_agent.Agents.Edgeui_Agent.screenshot import MINUTE_WINDOW_PRESETS
 from oncall_agent.types import VictorOpsIncident
 
 

@@ -1,0 +1,66 @@
+[
+  {
+    "fingerprint": "KubePersistentVolumeFillingUp/*",
+    "alertname": "KubePersistentVolumeFillingUp",
+    "alert_pattern": "[FIRING:1] <cluster> : KubePersistentVolumeFillingUp - PVC <name> in <cluster> is only N% free",
+    "environment": "any k8s cluster (seen on transcode scratch storage)",
+    "occurrences_observed": 1,
+    "typical_resolution_minutes": 27,
+    "diagnosis_steps": [
+      "Extract PVC name and namespace from alert (alert body includes 'PVC <name> filling up in <cluster>' and % free)",
+      "Confirm current usage on the storage dashboard; post the panel screenshot showing % free",
+      "Check whether the writer is a transcode/scratch workload - these fill during big jobs and MAY self-recover when the job completes",
+      "Check the runbook link embedded in the alert (Runbook: KubePersistentVolumeFillingUp - Resizing PVCs)"
+    ],
+    "resolution_steps": [
+      "Resize the PVC upward (observed: +50GB on a volume at ~8% free), per the resizing-PVCs runbook",
+      "Verify free space recovers (observed: 8% -> 39% free after adding 50GB)",
+      "Post the after screenshot in thread; resolved"
+    ],
+    "gotchas": [
+      "PVCs only grow, never shrink - size increases are permanent cost",
+      "Ack the VictorOps incident early so it doesn't escalate while you work"
+    ],
+    "escalation": "App owner if the same PVC needs resizing repeatedly (indicates a leak/retention problem, not capacity)",
+    "example_commands": [
+      "kubectl get pvc <name> -n <ns>",
+      "kubectl patch pvc <name> -n <ns> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"<new>Gi\"}}}}'"
+    ]
+  },
+  {
+    "fingerprint": "KubePodsNotReady/*",
+    "alertname": "KubePodsNotReady / KubePodCrashLooping",
+    "alert_pattern": "[FIRING:N] <cluster> : KubePodsNotReady (often N in the tens; engine pods)",
+    "environment": "any aiWARE k8s cluster; usually engine pods",
+    "occurrences_observed": 5,
+    "typical_resolution_minutes": 60,
+    "diagnosis_steps": [
+      "List not-ready pods and bucket by state: kubectl get pods -n aiware | grep -vE 'Running|Completed' - states seen: ImagePullBackOff, CrashLoopBackOff, Error, Pending/Init",
+      "ImagePullBackOff: verify the image tag actually exists in the registry (docker manifest inspect <image>); also check engine BUILD state - builds not in 'Deployed' state have caused pulls of unavailable images",
+      "Pending with FailedScheduling: read the event - node taints observed (ToBeDeletedByClusterAutoscaler, uninitialized, network-unavailable) usually mean node churn in progress",
+      "Error/CrashLoop: grep pod logs for the failure signature: panic|fatal|context deadline|Throttl|OOM|connection refused",
+      "Common crash signature: engine toolkit 'Failed to start subprocess [/opt/runner] err=context deadline exceeded' = engine couldn't reach the edge controller at startup",
+      "Check node health for the affected pods (kubectl describe node - pressure conditions, Ready history)",
+      "Check whether an ongoing change (cluster upgrade, controller rollout, load test) explains it - link the change thread"
+    ],
+    "resolution_steps": [
+      "Bulk-delete pods stuck in Error so the controller recreates them (observed 3500+ Error pods deleted at once)",
+      "If new pods immediately re-enter Error with the same log signature, deleting is futile - the dependency (edge controller / registry) is the problem; fix that first",
+      "For engine builds not Deployed: deploy the builds, pods recover",
+      "For autoscaler taint churn: usually self-heals as nodes finish cycling; monitor",
+      "Confirm backlogs drain after pods recover; resolved"
+    ],
+    "gotchas": [
+      "FIRING count is inflated - 50 crashlooping pods is usually ONE root cause (one engine build, one dependency, one node event)",
+      "If controller pods were rolled after the incident window, the relevant logs are gone - note it and move on rather than guessing",
+      "Deleting Error pods without checking the crash signature just burns scheduler cycles when the root cause persists"
+    ],
+    "escalation": "Engine/platform team when the crash is inside engine code or builds need redeployment",
+    "example_commands": [
+      "kubectl get pods -n aiware --no-headers | grep eng | awk '{count[$3]++} END {for (s in count) print s, count[s]}'",
+      "kubectl logs <pod> -n aiware | grep -iE 'panic|fatal|context deadline|Throttl|OOM'",
+      "kubectl get events -n aiware --sort-by=.lastTimestamp | tail -30",
+      "docker manifest inspect <registry>/<image>:<tag>"
+    ]
+  }
+]
