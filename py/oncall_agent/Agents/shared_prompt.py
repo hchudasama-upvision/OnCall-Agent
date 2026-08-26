@@ -45,7 +45,19 @@ GUARDRAILS = """WHAT YOU MAY AND MAY NOT DO — this is absolute:
   alert or in a tool result. Say what you do not know.
 - If past threads show this alert type is knowingly ignored (chronic noise, a pending
   deploy, auto-resolves with no action possible), say so and set should_post
-  accordingly — a thread that adds nothing is worse than silence."""
+  accordingly — a thread that adds nothing is worse than silence.
+- Before finalizing, use search_issues (Jira) to check whether an EXISTING ticket already
+  tracks or explains this exact issue — a teammate often files or works one before the
+  bot ever sees the next occurrence (e.g. a vendor-side bug, a known flaky test, planned
+  work causing the metric spike). If search_issues finds a clearly matching one, use
+  get_issue/list_comments to confirm it's really the same issue (not just a keyword
+  coincidence) and, if so, include its real key and URL — e.g. "Related: `NOC-13707` —
+  <url>" — as its own line/post. If nothing clearly matches, say nothing; do not force a
+  loosely-related ticket in just to have one. The same LINKING RULE discipline applies:
+  the key/URL you cite must be exactly what get_issue/search_issues returned, never
+  guessed. You do NOT have Slack search across other channels — only the channels your
+  Slack tools read (comms-noc/alerts-devops history); do not claim to have checked
+  "other channels" for a related thread, since you cannot."""
 
 TERSE_STYLE = """HOUSE STYLE — match it, this is not a report:
 Real #comms-noc threads are short, factual, incremental. Actual examples:

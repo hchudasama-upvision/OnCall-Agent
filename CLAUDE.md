@@ -141,6 +141,26 @@ Three lineages merged here:
   or simply wrong, and the model is told to check current evidence before
   repeating it. Only written after `_validate()` passes, so a failed run is
   never memorized as if it were a finding.
+- **Read-only GitHub and Jira tools (2026-08-26), `Agents/Github_Agent/` and
+  `Agents/Jira_Agent/`.** A real code regression (GitHub) or an
+  already-filed ticket (Jira) is frequently the actual answer to "why is
+  this firing," and a case-library note written once goes stale the moment
+  the real PR merges or the real ticket gets a resolving comment. Not a
+  routed specialist — both are an extra toolset layered onto the specialists
+  that already exist: GitHub only onto Edgeui_Agent (a real code
+  regression is the common case there specifically); Jira onto every
+  specialist, because a relevant ticket is not domain-specific the way a
+  GitHub code fix is — 2026-08-26 examples: a Rekognition throttling alert,
+  a Runscope Track Job failure, and a PandoLogic disk alert each had one.
+  GitHub is a deliberate exception to non-negotiable #4: it shells out to
+  the `gh` CLI's own already-authenticated OAuth session instead of a
+  `.env` token, the same reasoning already applied to the `claude_cli`
+  provider above. Jira is NOT an exception — `JIRA_EMAIL`/`JIRA_API_TOKEN`
+  are real `.env` credentials, same as every other tool. Both surface a
+  found key/URL into the same generic tool-result corpus
+  `investigate.py`'s `_allowed_urls` already scans, so no fabrication-check
+  changes were needed for either — the model must cite exactly what
+  `search_issues`/`get_pr`/etc. actually returned, never a guessed key.
 
 ## Traps already hit — do not re-introduce
 

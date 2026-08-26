@@ -311,6 +311,14 @@ def test_specialist_routing() -> None:
               for cfg in SPECIALISTS.values()))
     check("edge_ui specialist has no tools from other domains",
           not any("noc_grafana" in t or "noc_runscope" in t for t in SPECIALISTS["edge_ui"]["tools"]))
+    check("edge_ui specialist has the GitHub tools (the one domain where a real code/PR check pays off)",
+          any(t.startswith("mcp__noc_github__") for t in SPECIALISTS["edge_ui"]["tools"]))
+    for other in ("kubernetes", "grafana_metrics", "runscope"):
+        check(f"{other!r} specialist has NO GitHub tools (kept edge_ui-only for now)",
+              not any(t.startswith("mcp__noc_github__") for t in SPECIALISTS[other]["tools"]))
+    check("every specialist gets the Jira tools too (a related ticket isn't domain-specific)",
+          all(any(t.startswith("mcp__noc_jira__") for t in cfg["tools"])
+              for cfg in SPECIALISTS.values()))
     for name in ("edge_ui", "kubernetes", "grafana_metrics", "runscope"):
         check(f"specialist {name!r} has its own case_library",
               "case_library" in SPECIALISTS[name] and SPECIALISTS[name]["case_library"] is not None)
@@ -442,7 +450,7 @@ def test_mcp_server() -> None:
     check("tools/call returns content",
           "C909ZH4ET" in json.dumps(responses.get(3, {}).get("result", {})))
 
-    group("edge ui / runscope mcp servers (protocol only, no live calls)")
+    group("edge ui / runscope / github / jira mcp servers (protocol only, no live calls)")
     listing_only = "\n".join([
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                     "params": {"protocolVersion": "2024-11-05", "capabilities": {}}}),
@@ -451,6 +459,8 @@ def test_mcp_server() -> None:
     for module_name, expected_min_tools in (
         ("oncall_agent.Agents.Edgeui_Agent.server", 9),
         ("oncall_agent.Agents.Runscope_Agent.server", 1),
+        ("oncall_agent.Agents.Github_Agent.server", 5),
+        ("oncall_agent.Agents.Jira_Agent.server", 3),
     ):
         proc = subprocess.run(
             [sys.executable, "-m", module_name],

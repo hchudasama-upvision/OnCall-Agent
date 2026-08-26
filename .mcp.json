@@ -10,6 +10,17 @@
     "             download. Given to the Edge UI/engine specialist only.",
     "noc_runscope one tool: look up the current run of the Runscope test matching an",
     "             alert. Given to the Runscope specialist only.",
+    "noc_github   read-only GitHub via `gh` CLI (already authenticated on this machine,",
+    "             see Agents/Github_Agent/github_client.py's credential note): search",
+    "             code, read a file, check a PR/commit, list workflow runs. Given to the",
+    "             Edge UI/engine specialist, so it can verify real code/deploy state",
+    "             instead of trusting a case-library note.",
+    "noc_jira     read-only Jira Cloud REST API (JIRA_EMAIL/JIRA_API_TOKEN in .env, see",
+    "             Agents/Jira_Agent/jira_client.py): search for and read an EXISTING",
+    "             ticket that already tracks this exact issue. Given to every",
+    "             specialist — unlike GitHub, a relevant Jira ticket isn't specific to",
+    "             one alert domain (2026-08-26 example: Rekognition throttling, a",
+    "             Runscope Track Job failure, and a PandoLogic disk alert all had one).",
     "",
     "All read-only apart from render_panel/capture_*_screenshot/download_*_logs,",
     "which write evidence files into dist/evidence. None can post to Slack — the bot",
@@ -41,6 +52,18 @@
     "noc_runscope": {
       "command": "python",
       "args": ["-m", "oncall_agent.Agents.Runscope_Agent.server"],
+      "cwd": "py",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    "noc_github": {
+      "command": "python",
+      "args": ["-m", "oncall_agent.Agents.Github_Agent.server"],
+      "cwd": "py",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    "noc_jira": {
+      "command": "python",
+      "args": ["-m", "oncall_agent.Agents.Jira_Agent.server"],
       "cwd": "py",
       "env": { "PYTHONUNBUFFERED": "1" }
     }

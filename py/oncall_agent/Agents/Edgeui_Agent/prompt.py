@@ -7,15 +7,30 @@ own proven, validated fixed post structure (DESIGN.md Appendix B.1,
 confirmed live against a real reference thread this session), and this
 agent's own case library (data/cases.json, right next to this file — nobody
 outside this folder reads it).
+
+Also the only specialist given the read-only GitHub tools
+(Agents/Github_Agent) — engine-failure root causes are almost always a real
+code regression with a real PR/commit, so this is the one domain where
+checking the actual repo (not just a case-library note written once) pays
+off. See Github_Agent/github_client.py for what it can reach and why.
+
+Also given the read-only Jira tools (Agents/Jira_Agent), like every other
+specialist (see shared_prompt.GUARDRAILS) — for checking whether an existing
+ticket already tracks this exact issue.
 """
 from pathlib import Path
 
 from ...case_library import load_case_library
 from ...investigate import SLACK_TOOLS
+from ..Github_Agent import server as github_server
+from ..Jira_Agent import server as jira_server
 from ..shared_prompt import GUARDRAILS, LINKING_RULE, ROLE, VERBATIM_RULE
 from . import server
 
-TOOLS = [f"mcp__noc_edge_ui__{t['name']}" for t in server.TOOLS] + SLACK_TOOLS
+TOOLS = ([f"mcp__noc_edge_ui__{t['name']}" for t in server.TOOLS]
+        + [f"mcp__noc_github__{t['name']}" for t in github_server.TOOLS]
+        + [f"mcp__noc_jira__{t['name']}" for t in jira_server.TOOLS]
+        + SLACK_TOOLS)
 
 CASE_LIBRARY = load_case_library(Path(__file__).resolve().parent / "data" / "cases.json")
 
@@ -37,11 +52,23 @@ in this order (omit a post only if it has nothing to say):
   4. "TDO: `<tdo>`" / a short note that task/job logs are attached — attach both logs.
   5. root_cause_narrative as:
        Root cause:
-       1. <finding>
-       2. <finding>
-     Each numbered line is one concrete finding — short and scannable for a team
-     reviewing the thread, not one flowing paragraph.
-  6. The escalation line: owning_team_mention (if any) followed by "FYI^^", nothing else."""
+       1. <what is happening, in plain words>
+       2. <what caused it, and how you know>
+       3. <what fixes it / what has to happen for it to stop>
+     Numbered, one sentence each, so it's still scannable — but each sentence is a
+     PLAIN-LANGUAGE STORY BEAT a non-engineer teammate could follow, told in the order
+     it actually happened, not a dense technical fragment stitched from tool output.
+     Say what happened, then what caused that, then what happens next — cause and
+     effect in plain words, not "Introduced by the image2pipe fix in PR #10693
+     (VE-26837), which broke ffmpeg streaming" (reads like a commit log, not an
+     explanation). Prefer: "This started when PR #10693 shipped a fix for image2pipe —
+     but that fix accidentally broke ffmpeg streaming instead." Still cite the real
+     PR/error code/version by name (never drop the facts), just say them the way you'd
+     explain it out loud to a teammate, not the way you'd write it in a bug tracker.
+  6. OPTIONAL — only if search_issues found a genuinely matching Jira ticket (see
+     GUARDRAILS): "Related: `<KEY>` — <url>", its own post, after root_cause_narrative
+     and before the escalation line. Omit entirely if nothing clearly matches.
+  7. The escalation line: owning_team_mention (if any) followed by "FYI^^", nothing else."""
 
 SYSTEM_PROMPT = f"""{ROLE}
 
@@ -62,6 +89,15 @@ Slack tools.
 4. capture_tasks_page_screenshot and capture_engine_page_screenshot for that engine
    and window. download_task_and_job_logs on the representative task for the TDO and
    log files.
+5. If a matching case-library entry names a fix PR, use get_pr (repo e.g.
+   "veritone/realtime") to check whether it is REALLY merged, not just cited in the
+   case — a case entry is a human's note from whenever it was written, not a live
+   fact. If the entry says a deploy-verification step is automated, use
+   list_workflow_runs to check whether that automation actually ran recently and what
+   it concluded, instead of just repeating the case's claim. search_code/get_file are
+   there if you need to see the actual code path an error references. A tool that
+   fails with an SSO/permission error is real information — say so plainly rather than
+   silently falling back to the case-library text as if it were verified.
 
 {_FORMAT}
 

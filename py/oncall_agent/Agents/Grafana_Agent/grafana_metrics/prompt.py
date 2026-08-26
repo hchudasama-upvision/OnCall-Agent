@@ -13,9 +13,10 @@ from pathlib import Path
 
 from ....case_library import load_case_library
 from ....investigate import GRAFANA_TOOLS, SLACK_TOOLS
+from ...Jira_Agent import server as jira_server
 from ...shared_prompt import GUARDRAILS, LINKING_RULE, ROLE, TERSE_STYLE, VERBATIM_RULE
 
-TOOLS = GRAFANA_TOOLS + SLACK_TOOLS
+TOOLS = GRAFANA_TOOLS + [f"mcp__noc_jira__{t['name']}" for t in jira_server.TOOLS] + SLACK_TOOLS
 
 CASE_LIBRARY = load_case_library(Path(__file__).resolve().parent / "data" / "cases.json")
 

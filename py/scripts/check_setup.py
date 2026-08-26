@@ -143,6 +143,8 @@ def check_investigation(config) -> None:
         ("oncall_agent.Agents.Grafana_Agent.server", "grafana mcp server"),
         ("oncall_agent.Agents.Edgeui_Agent.server", "edge ui mcp server"),
         ("oncall_agent.Agents.Runscope_Agent.server", "runscope mcp server"),
+        ("oncall_agent.Agents.Github_Agent.server", "github mcp server"),
+        ("oncall_agent.Agents.Jira_Agent.server", "jira mcp server"),
     ):
         _check_mcp_server(module_name, label)
 
@@ -270,6 +272,60 @@ def check_edge() -> None:
         report("warn", "playwright", f"chromium cannot launch: {detail}")
 
 
+def check_github() -> None:
+    import shutil
+    import subprocess
+
+    if not shutil.which("gh"):
+        report("warn", "github cli", "`gh` not installed — the Edge UI specialist's GitHub tools "
+                                     "(search_code/get_file/get_pr/get_commit/list_workflow_runs) "
+                                     "will fail on every call")
+        return
+    try:
+        who = subprocess.run(["gh", "api", "user", "--jq", ".login"],
+                             capture_output=True, text=True, timeout=15)
+    except Exception as e:                              # noqa: BLE001
+        report("warn", "github cli", f"`gh api user` failed to run: {type(e).__name__}: {e}")
+        return
+    if who.returncode != 0:
+        report("warn", "github cli", f"not authenticated — run `gh auth login`. "
+                                     f"({(who.stderr or who.stdout).strip().splitlines()[0]})")
+        return
+    report("pass", "github cli", f"gh authenticated as {who.stdout.strip()}")
+    # Org membership isn't the same as SSO authorization for that specific
+    # token — an org with SAML SSO enforced (veritone is one) blocks API
+    # access until a human clicks through https://github.com/orgs/<org>/sso,
+    # separately from being a member. Only warn, never fail: repos outside
+    # an SSO-enforcing org still work fine with this same token.
+    report("warn", "github sso", "org membership doesn't guarantee API access — an SSO-enforcing "
+                                 "org (e.g. veritone) blocks this token until you authorize it at "
+                                 "https://github.com/orgs/<org>/sso. Not checked here per-org; if a "
+                                 "GitHub tool call fails with a SAML enforcement error, that's the fix.")
+
+
+def check_jira() -> None:
+    site = os.environ.get("JIRA_SITE")
+    email = os.environ.get("JIRA_EMAIL")
+    token = os.environ.get("JIRA_API_TOKEN")
+    if not (site and email and token):
+        report("warn", "jira", "JIRA_SITE/JIRA_EMAIL/JIRA_API_TOKEN unset — no specialist can check "
+                               "for an existing Jira ticket related to an alert")
+        return
+    import requests
+    try:
+        res = requests.get(f"{site.rstrip('/')}/rest/api/3/myself",
+                           auth=requests.auth.HTTPBasicAuth(email, token),
+                           headers={"Accept": "application/json"}, timeout=15)
+    except Exception as e:                              # noqa: BLE001
+        report("warn", "jira", f"request failed to run: {type(e).__name__}: {e}")
+        return
+    if res.ok:
+        who = res.json().get("displayName", email)
+        report("pass", "jira auth", f"{site} reads as {who}")
+    else:
+        report("warn", "jira auth", f"{res.status_code} {res.reason} — check JIRA_EMAIL/JIRA_API_TOKEN")
+
+
 def main() -> int:
     load_dotenv()
     config = load_config()
@@ -283,6 +339,8 @@ def main() -> int:
     check_panel_map()
     check_cases()
     check_edge()
+    check_github()
+    check_jira()
     print(f"\n{_failures} failure(s), {_warnings} warning(s).")
     if config.post_mode == "dry_run":
         print("POST_MODE=dry_run — nothing will be posted to Slack until you set POST_MODE=live.")

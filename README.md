@@ -440,7 +440,9 @@ py/oncall_agent/
                            /decide_resolution.py/live_edge_ui_client.py/
                            edge_api.py/edge_environments.py/
                            engine_task_stats.py/screenshot.py) kept as a
-                           rollback, unused
+                           rollback, unused. The only specialist also given
+                           Github_Agent's tools (below) — a real code
+                           regression is the common case here.
     Grafana_Agent/          server.py (Grafana MCP tools: search/describe/
                            query/render), grafana.py, grafana_capture.py —
                            shared by K8S_Agent and grafana_metrics below
@@ -451,6 +453,20 @@ py/oncall_agent/
                            via Grafana_Agent's tools — no kubectl yet)
     Runscope_Agent/         synthetic-test specialist: server.py, prompt.py,
                            runscope_client.py, data/cases.json
+    Github_Agent/           read-only GitHub via the `gh` CLI's own existing
+                           auth (see github_client.py's credential note):
+                           search code, read a file, check a PR/commit,
+                           list workflow runs. Not a routed specialist —
+                           an extra toolset given to Edgeui_Agent only.
+    Jira_Agent/             read-only Jira Cloud REST API (JIRA_EMAIL/
+                           JIRA_API_TOKEN in .env, see jira_client.py):
+                           search_issues/get_issue/list_comments, so a
+                           specialist can find and cite an EXISTING ticket
+                           that already tracks this exact issue instead of
+                           only a case-library note. Not a routed
+                           specialist — given to every specialist (a
+                           relevant Jira ticket isn't domain-specific the
+                           way a GitHub code fix is).
 py/scripts/
   run_listener.py          main entry point
   run_live_test.py         manual single-incident run (old deterministic
