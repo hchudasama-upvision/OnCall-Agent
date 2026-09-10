@@ -88,6 +88,33 @@
         "var-hostname": "{host}",
         "var-instance": "{resolve:instance}"
       }
+    },
+    "HostCPUUtilizationCritical": {
+      "_dashboard": "VMware ESXi \u2014 $esxhost is the ESXi host_name",
+      "_labels_seen": "<cluster> | <datacenter> | <ESXi host_name> | <vmware_exporter instance> | vmware_vcenter | <severity> | n/a",
+      "_why_label_2": "The alert names TWO FQDNs and only the FIRST is the subject: label 2 is the ESXi host (series label host_name), label 3 is the vmware_exporter that scrapes vCenter (series label instance). Verified against a live series 2026-08-31 \u2014 graphing label 3 would chart the wrong machine entirely.",
+      "dashboard_uid": "ead34884-4dca-4c80-bff3-a3aac2c4dc34",
+      "panels": [
+        17,
+        12
+      ],
+      "from": "now-15m",
+      "variables": {
+        "var-esxhost": "{label:2}"
+      }
+    },
+    "HostMemoryUtilizationCritical": {
+      "_dashboard": "VMware ESXi \u2014 same dashboard, the memory pair of panels",
+      "_labels_seen": "same shape as HostCPUUtilizationCritical",
+      "dashboard_uid": "ead34884-4dca-4c80-bff3-a3aac2c4dc34",
+      "panels": [
+        18,
+        13
+      ],
+      "from": "now-15m",
+      "variables": {
+        "var-esxhost": "{label:2}"
+      }
     }
   }
 }

@@ -11,31 +11,84 @@
     "no domain tool) rather than a wrong guess.",
     "",
     "Editable without touching code, same spirit as data/cases.json and",
-    "config/panel_map.json — add a keyword here as new alert types are learned."
+    "config/panel_map.json \u2014 add a keyword here as new alert types are learned."
   ],
   "routes": [
     {
+      "specialist": "edge_ui",
+      "keywords": [
+        "Engine backlog",
+        "EngineBacklog",
+        "engine backlog critical"
+      ]
+    },
+    {
+      "specialist": "aws",
+      "keywords": [
+        "RDS_",
+        "RDS CPU",
+        "RDSCPU",
+        "DatabaseConnections",
+        "RDS_FreeStorage",
+        "RDS_FreeableMemory",
+        "RDS_ReadLatency",
+        "RDS_WriteLatency",
+        "Aurora",
+        "Rekognition",
+        "ThrottledCount",
+        "Throttled",
+        "CloudWatch",
+        "ALBUnhealthyHost",
+        "AlbUnhealthyHost",
+        "UnhealthyHost"
+      ]
+    },
+    {
       "specialist": "kubernetes",
       "keywords": [
-        "KubePodsNotReady", "KubePodCrashLooping", "KubePodNotReady",
-        "KubePersistentVolumeFilling", "KubeHpaMaxedOut", "KubeDeployment"
+        "KubePodsNotReady",
+        "KubePodCrashLooping",
+        "KubePodNotReady",
+        "KubePersistentVolumeFilling",
+        "KubeHpaMaxedOut",
+        "KubeDeployment"
       ]
     },
     {
       "specialist": "runscope",
       "keywords": [
-        "Track Job", "Site DNS Valdation", "SOLR Asset Reindex", "Public Stream",
-        "CNBC", "Runscope"
+        "Track Job",
+        "Site DNS Valdation",
+        "SOLR Asset Reindex",
+        "Public Stream",
+        "CNBC",
+        "Runscope"
       ]
     },
     {
       "specialist": "grafana_metrics",
       "keywords": [
-        "DiskSpaceUtilization", "VM Disk Usage", "High memory utilization",
-        "ActiveYellowAlarms", "ActiveRedAlarms", "AlbUnhealthyHost",
-        "API Success Rate", "ApiSuccessRate", "ThanosReceiveForward",
-        "ThanosComponentHighMemory", "NFSConnectionCheckFailed",
-        "SqsMessageAge", "EngineBacklog", "SiteErrorStatusCodes"
+        "DiskSpaceUtilization",
+        "VM Disk Usage",
+        "High memory utilization",
+        "ActiveYellowAlarms",
+        "ActiveRedAlarms",
+        "API Success Rate",
+        "ApiSuccessRate",
+        "ThanosReceiveForward",
+        "ThanosComponentHighMemory",
+        "NFSConnectionCheckFailed",
+        "SqsMessageAge",
+        "SiteErrorStatusCodes",
+        "Response Codes",
+        "EndpointDown",
+        "High concurrent_requests",
+        "High nodejs_active_handles",
+        "concurrent_requests",
+        "nodejs_active_handles",
+        "HostCPUUtilization",
+        "HostMemoryUtilization",
+        "HostOutOfMemory"
       ]
     }
   ]

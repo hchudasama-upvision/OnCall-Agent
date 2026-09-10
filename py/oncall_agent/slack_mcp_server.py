@@ -29,6 +29,8 @@ Run it directly to sanity-check the wiring:
     python -m oncall_agent.slack_mcp_server --selftest
 """
 import json
+import time
+import re
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -132,7 +134,96 @@ def tool_list_channels() -> str:
             f"\n\nToken in use: {'user (xoxp)' if _is_user_token() else 'bot (xoxb)'}")
 
 
+# Channels where planned work is announced — deploys, maintenance windows, ITSM
+# change records. Empty by default on purpose: reading the WRONG channel and
+# reporting "no change found" is worse than saying the check was not configured,
+# and PROFILE=test deliberately ships no channel defaults anywhere (CLAUDE.md
+# non-negotiable #5).
+CHANGE_CHANNELS = [c.strip() for c in os.environ.get("CHANGE_CHANNELS", "").split(",")
+                   if c.strip()]
+
+
+def tool_search_recent_changes(query: str, hours: int = 24, limit: int = 8) -> str:
+    """Was planned work happening around this alert?
+
+    Reads the CHANGE_CHANNELS (deploys / maintenance / ITSM change records) and
+    returns the recent messages that mention `query` — a hostname, endpoint,
+    service or cluster. This is the check a NOC engineer does before treating an
+    EndpointDown as an incident: a Jenkins endpoint that is down during its own
+    scheduled maintenance is not an outage.
+
+    Deliberately NOT a verdict. It returns what those channels actually say, or
+    says plainly that it could not read them. "No match" is not proof that no
+    change is happening — it is the absence of an announcement in these
+    channels, and the thread must say it that way.
+    """
+    if not CHANGE_CHANNELS:
+        return ("CHANGE_CHANNELS is not configured, so no change/maintenance channel was "
+                "searched. Do not conclude anything about planned work — say the check was "
+                "unavailable. (Set CHANGE_CHANNELS in .env, e.g. '#prod-deploy,#change-mgmt'.)")
+
+    oldest = str(time.time() - max(1, int(hours)) * 3600)
+    needle = (query or "").strip().lower()
+    # A hostname is the useful needle, not the whole URL: a deploy message says
+    # "jenkins" or "us-1", never "https://jenkins.us-1.veritone.com/?x=1".
+    tokens = {tok for tok in re.split(r"[^a-z0-9.-]+", needle) if len(tok) >= 4}
+    if needle:
+        tokens.add(needle)
+
+    found, unreachable = [], []
+    for channel in CHANGE_CHANNELS:
+        try:
+            channel_id = _channel_id(channel)
+            res = _slack().conversations_history(channel=channel_id, limit=200, oldest=oldest)
+        except Exception as e:                          # noqa: BLE001 — report, keep going
+            unreachable.append(f"{channel} ({str(e).splitlines()[0][:120]})")
+            continue
+        for message in res.get("messages", []):
+            text = (message.get("text") or "")
+            if tokens and not any(tok in text.lower() for tok in tokens):
+                continue
+            found.append((channel, message.get("ts", ""), " ".join(text.split())[:300]))
+
+    lines = []
+    if found:
+        lines.append(f"{len(found)} message(s) in the last {hours}h mentioning {query!r}:")
+        for channel, ts, text in found[:max(1, int(limit))]:
+            lines.append(f"  [{channel} ts={ts}] {text}")
+        if len(found) > limit:
+            lines.append(f"  ... {len(found) - limit} more not shown.")
+        lines.append("These are announcements, not confirmation that the change caused this. "
+                     "Quote them as what the channel says.")
+    else:
+        lines.append(f"No message in the last {hours}h in {', '.join(CHANGE_CHANNELS)} mentions "
+                     f"{query!r}. That is the absence of an announcement in those channels — "
+                     f"not proof that no change is under way. Say it that way.")
+    if unreachable:
+        lines.append("COULD NOT READ: " + "; ".join(unreachable)
+                     + " — report this as a gap; do not treat it as 'no change found'.")
+    return "\n".join(lines)
+
+
 TOOLS = [
+    {
+        "name": "search_recent_changes",
+        "description": (
+            "Was planned work announced around this alert? Searches the configured change/"
+            "deploy/maintenance channels (CHANGE_CHANNELS) for recent messages mentioning a "
+            "host, endpoint, service or cluster. Use it before calling an EndpointDown an "
+            "incident — and report 'no announcement found' as exactly that, never as 'no "
+            "change is happening'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "host/endpoint/service to look for"},
+                "hours": {"type": "integer", "description": "how far back (default 24)"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+        },
+        "handler": tool_search_recent_changes,
+    },
     {
         "name": "read_channel",
         "description": (

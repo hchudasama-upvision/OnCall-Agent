@@ -171,6 +171,18 @@ def panel_data(datasource_uid: str, expr: str, from_="now-6h", to="now", step_se
     return json.loads(raw)
 
 
+def instant_query(datasource_uid: str, promql: str) -> list:
+    """One instant PromQL query, returning the raw series list.
+
+    resolve_label() below wraps this to pull a single label value; endpoint
+    alerts need the whole series (every label IS the evidence: url, status,
+    expected_status_code, cert expiry), so this returns them unreduced.
+    """
+    query = urllib.parse.quote(promql)
+    raw, _ = _request(f"/api/datasources/proxy/uid/{datasource_uid}/api/v1/query?query={query}")
+    return json.loads(raw).get("data", {}).get("result") or []
+
+
 def resolve_label(datasource_uid: str, promql: str, label: str) -> Optional[str]:
     """Run an instant query and return one label value from the first series.
 

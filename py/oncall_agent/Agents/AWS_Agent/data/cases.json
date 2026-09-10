@@ -1,0 +1,113 @@
+[
+  {
+    "fingerprint": "RDS_CPUUtilization/us-1-prod",
+    "alertname": "RDS_CPUUtilizationAvgCriticalCore / RDS_CPUUtilizationAvgWarning",
+    "alert_pattern": "[FIRING:1] us-1 : prod - RDS_CPUUtilizationAvgCriticalCore",
+    "environment": "us-1 prod core database (account 026972849384, profile `main`, us-east-1). Siblings: prod-core-rds, prod-media-rds, prod-thirdparty-rds, and the stage-*-rds2 set",
+    "occurrences_observed": 0,
+    "typical_resolution_minutes": 0,
+    "_owner_direction": "2026-08-31: investigate CPUUtilization and DatabaseConnections graphs for the instance, attach both, search for the top query, and post a usage graph again after 5-10 minutes (follow_up.py does that automatically).",
+    "diagnosis_steps": [
+      "rds_instance_summary \u2014 confirm WHICH instance and which account. The alert says the environment (us-1 : prod), not the database; `core` in the alert name maps to the *-core-rds instance. Never assume: the tool searches and reports the account it found.",
+      "rds_metrics \u2014 CPU now/avg/peak plus connections, freeable memory, IOPS and queue depth over the same window. These numbers go in the thread; the graph is separate evidence, not a source to read from.",
+      "rds_metric_graph twice \u2014 CPUUtilization and DatabaseConnections, one metric per graph. CloudWatch renders them server-side, so there is no browser and no settle problem.",
+      "rds_top_queries \u2014 top SQL by db.load.avg AND the wait events. The wait events are the discriminator: `CPU` at the top means genuinely CPU-bound; `IO:DataFileRead` means it is waiting on storage; `Lock:*` means contention. Observed on stage-core-rds2 (2026-08-31): CPU 0.550, IO:DataFileRead 0.120.",
+      "rds_events \u2014 a failover, reboot, backup or parameter-group change in the window explains a CPU spike more often than a query does. The nightly backup shows up here (observed 02:11-02:12Z on stage-core-rds2).",
+      "Check #comms-noc for this instance: a database that spikes on a schedule is a known pattern, not a new incident."
+    ],
+    "resolution_steps": [
+      "Post the two graphs, the numbers and the top SQL. The action is a human's \u2014 scaling an instance class, killing a query or rolling back a deploy are all decisions with cost or customer impact, and none of them is the agent's to take.",
+      "A usage graph is posted again automatically 5 and 10 minutes later (follow_up.py, kind `rds_usage`). Do not promise a re-check or ask a human to watch it."
+    ],
+    "gotchas": [
+      "Performance Insights returns TOKENIZED statements \u2014 $1/$2 replace literal values, so no customer data comes back with them. Quote them as returned; never reconstruct a real query.",
+      "`db.load.avg` is average active sessions, not a percentage. 0.466 means about half a session busy on average \u2014 state what the number means or it reads as 46%.",
+      "storage on these instances is io1 with a large allocation (stage-core-rds2: 15999GB), so ReadIOPS peaks in the thousands are normal \u2014 compare against the instance's own baseline, not against zero.",
+      "A CPU alert on a Multi-AZ=false instance has no standby to fail over to; say so if it is relevant, since it changes what a human can safely do.",
+      "The SSO session expires several times a day. Every tool reports it as expired and names the profile \u2014 that is a gap to report, never a reason to estimate a metric."
+    ],
+    "escalation": "The database owner / aiWARE platform team; a sustained CPU-bound core database is customer-facing",
+    "example_commands": [
+      "aws sso login --profile main   (for the human, when a tool reports the session expired)",
+      "python -m oncall_agent.Agents.AWS_Agent.server --selftest stage-core-rds2"
+    ]
+  },
+  {
+    "fingerprint": "Rekognition-ThrottledCount/wpsc01-gov",
+    "alertname": "Rekognition-ThrottledCount-High-wpsc01",
+    "alert_pattern": "Rekognition-ThrottledCount-High-wpsc01 (a CloudWatch alarm name, used verbatim as the alert title)",
+    "environment": "GovCloud account 113765098011, us-gov-west-1, profile `us-1-gov` \u2014 assume-role from STATIC KEYS in ~/.aws/credentials [vtgovuser]. NOT SSO; do not tell anyone to run `aws sso login` for this one.",
+    "occurrences_observed": 1,
+    "typical_resolution_minutes": 0,
+    "_owner_direction": "2026-08-31: the only gov-AWS alert in the same shape as the commercial ones. Screenshot it from CloudWatch, and take multiple captures across 5-10 minutes (follow_up.py kind `cloudwatch_usage` does that automatically).",
+    "cloudwatch": {
+      "_verified": "read live on 2026-08-31",
+      "alarm": "Rekognition-ThrottledCount-High-wpsc01",
+      "condition": "AWS/Rekognition ThrottledCount, Sum over 300s, GreaterThanThreshold 100, 1 evaluation period, NO dimensions \u2014 it is account-wide Rekognition throttling, not one resource",
+      "companion_metrics": "CallCount, SuccessfulRequestCount, UserErrorCount, ServerErrorCount, ResponseTime, DetectedFaceCount, DetectedLabelCount \u2014 ThrottledCount alone says how many were refused; CallCount is what makes it a share rather than a bare number",
+      "observed_incident": "2026-08-27T18:12Z OK -> ALARM. ThrottledCount ran 39,172 then 199,075 then 265,093 per 5-minute bucket, peaking at 787.8K over the following days, against a threshold of 100.",
+      "gotcha": "CloudWatch's own image API (get-metric-widget-image) DOES NOT WORK in this GovCloud account \u2014 it answers 'Throttling: Rate exceeded' every time, including after three retries with backoff, while the identical call in the commercial account returns a PNG. cloudwatch_metric_graph falls back to drawing the series locally from get-metric-statistics and captions it as locally drawn. Do not describe such a graph as a CloudWatch console screenshot."
+    },
+    "diagnosis_steps": [
+      "cloudwatch_alarm('Rekognition-ThrottledCount-High-wpsc01') FIRST \u2014 it reports the condition, the current state, and the recent state changes, and it says which account/region/partition it found the alarm in.",
+      "Read the state carefully: INSUFFICIENT_DATA is NOT a healthy zero. It means Rekognition published no datapoints in the window, which for this account is common between bursts. cloudwatch_metric_values distinguishes 'no datapoints' from 'zero' explicitly \u2014 quote whichever it actually says.",
+      "cloudwatch_metric_values for ThrottledCount AND CallCount over the same window. A throttle count without a call count is half the story: 200k throttles out of 2M calls and 200k out of 210k are different incidents.",
+      "cloudwatch_metric_graph for ThrottledCount (pass alarm= so it inherits the GovCloud account and region, and picks up the threshold line).",
+      "State the window you graphed. The alarm evaluates a 5-minute Sum; a 3h graph and a 5-day graph tell different stories about the same alarm."
+    ],
+    "resolution_steps": [
+      "Post the numbers, the graph, and the alarm's own condition. The action is a human's: a Rekognition quota increase is an AWS support request with a cost conversation attached, and throttling caused by a runaway caller is an application decision.",
+      "Further captures at +5 and +10 minutes are posted automatically (follow_up.py, kind `cloudwatch_usage`) so the thread shows whether the burst is still climbing. Do not promise a re-check or ask a human to watch it."
+    ],
+    "gotchas": [
+      "This account uses static keys assuming a role, not SSO. If a call fails with expired credentials the fix is the keys or the assume-role, NOT `aws sso login` \u2014 saying the wrong one sends the on-call engineer down a dead end.",
+      "GovCloud ARNs are `arn:aws-us-gov:` \u2014 a copied commercial ARN will not match anything here.",
+      "The alarm has no dimensions, so 'which resource is throttled' has no answer from this metric. Say that rather than implying one Rekognition endpoint is at fault."
+    ],
+    "escalation": "The team that owns Rekognition usage in the gov environment; AWS support for a quota increase",
+    "example_commands": [
+      "aws cloudwatch describe-alarms --profile us-1-gov --region us-gov-west-1 --alarm-names Rekognition-ThrottledCount-High-wpsc01",
+      "python -m oncall_agent.Agents.AWS_Agent.server --selftest   (RDS half; the alarm tools take a name)"
+    ]
+  },
+  {
+    "fingerprint": "AlbUnhealthyHostCritical/us-1-prod",
+    "alertname": "ALBUnhealthyHostCritical / ALBUnhealthyHostWarning",
+    "alert_pattern": "<region> : <env> - ALBUnhealthyHostCritical (*Summary:* Application Load Balancer app/<lb-name>/<id> has at least N unhealthy instances for at least 15m)",
+    "environment": "any account/region with an ALB \u2014 uk-prod is account 026972849384 in eu-west-2, which is the first non-us-east-1 commercial region this repo touches",
+    "occurrences_observed": 1,
+    "typical_resolution_minutes": 10,
+    "diagnosis_steps": [
+      "alb_target_health(load_balancer=<the app/<name>/<id> tail from the summary>) FIRST \u2014 healthy/registered counts per target group, and the reason for every unhealthy target.",
+      "Post the counts the way the owner asked: how many targets are healthy vs not, per target group, plus each unhealthy target's state and reason.",
+      "alb_health_graph for HealthyHostCount vs UnHealthyHostCount over the last 3h, so the thread shows whether this is new or has been flapping.",
+      "Read the REASON before forming a view: FailedHealthChecks means the target is really failing its check; RegistrationInProgress means a newly launched instance is still warming up and will likely pass on its own (observed: healthy within ~9 minutes, no action).",
+      "If every target is healthy now, say so \u2014 the alert fires on 'at least 1 unhealthy for at least 15m', so it can recover before anyone looks. Check the graph before calling it a false alarm."
+    ],
+    "resolution_steps": [
+      "Post the counts, the reasons and the graph. The action stays a human's: pulling a target, rolling back a deploy or scaling the group are all decisions with customer impact.",
+      "A second look is posted automatically at +3 and +6 minutes (follow_up.py, kind `alb_health`) \u2014 a shorter cadence than the other families precisely because warm-up resolves inside that window. Do not promise a re-check."
+    ],
+    "gotchas": [
+      "Do not act in the first 5-10 minutes for fresh instances; most resolve on their own",
+      "If it stays unhealthy past warm-up, check the service on the health-check port and instance system log",
+      "The CloudWatch dimension is the ARN TAIL (`app/uk-prod-fastcore-app-http/992c86a8ba9f5fb3`), not the load-balancer name. Using the name returns no datapoints, which reads as 'no data' rather than 'wrong dimension'.",
+      "uk-prod is eu-west-2. AWS_REGIONS has to include it or find_load_balancer will not see the balancer at all and will say so.",
+      "A target group with zero registered targets returns an EMPTY health list and no metrics \u2014 that is 'nothing behind the LB', not 'everything healthy'.",
+      "Observed on the real uk-prod balancer: healthy dropped 4->3 twice in 3h with the same instance flapping. Say 'flapping' only if the graph shows it \u2014 one dip and a sustained failure need different urgency."
+    ],
+    "escalation": "The service owner behind the target group; infra for scaling decisions",
+    "example_commands": [
+      "aws elbv2 describe-target-health --profile uk-prod --region eu-west-2 --target-group-arn <arn>",
+      "aws sso login --profile uk-prod   (for the human, when a tool reports the session expired)"
+    ],
+    "_owner_direction": "2026-08-31: moved from the Grafana specialist to the AWS agent. Go to the load balancer itself, post how many targets are healthy vs unhealthy plus the status, and do it again after 2-3 minutes.",
+    "aws": {
+      "_verified": "ELBv2 and CloudWatch shapes read live 2026-08-31 (in a sibling account while the uk-prod SSO session was expired)",
+      "lookup": "The alert summary carries the ARN TAIL \u2014 app/<name>/<id> \u2014 and that is the only place the balancer is named. find_load_balancer() takes either the tail, the bare name or a full ARN, and searches the allowed profiles/regions.",
+      "tools": "alb_target_health for the counts and reasons, alb_health_graph for the picture",
+      "cloudwatch": "namespace AWS/ApplicationELB, dimensions LoadBalancer=app/<name>/<id> (the ARN tail, NOT the name) and TargetGroup=targetgroup/<name>/<id> (the tail of the target-group ARN). HealthyHostCount and UnHealthyHostCount belong on ONE graph \u2014 same unit, and the ratio is the question.",
+      "reasons": "TargetHealth.Reason is the discriminator: Target.FailedHealthChecks is a real failure; Elb.RegistrationInProgress and Target.HealthCheckInProgress are warm-up that resolves itself; Target.DeregistrationInProgress is a deploy in flight. Three different threads, and the old case's 'wait for warm-up' advice only applies to the second. OBSERVED LIVE on uk-prod-fastcore-app-http (2026-08-31): Target.ResponseCodeMismatch \u2014 'Health checks failed with these codes: [503]'. That is a FIFTH case and the important one: the instance is up and answering, the application behind it is returning 503, so 'wait for warm-up' is the wrong read and replacing the instance would not fix it."
+    }
+  }
+]

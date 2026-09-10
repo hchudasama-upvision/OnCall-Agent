@@ -17,3 +17,7 @@ slack-bolt
 # Only for LLM_PROVIDER=anthropic. The default provider (claude_cli) shells
 # out to the Claude Code CLI and needs no SDK.
 # anthropic
+# Only for Windows hosts WITHOUT windows_exporter — the
+# credential-free Prometheus path needs neither of these.
+pywinrm
+requests_ntlm

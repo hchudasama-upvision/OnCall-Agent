@@ -41,6 +41,7 @@ engine, restart anything, or post to Slack.
 import atexit
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -281,6 +282,80 @@ def tool_download_task_and_job_logs(env_key: str, task_id: str, job_id: str) -> 
 _WINDOW_SCHEMA = {"type": "integer", "enum": screenshot.MINUTE_WINDOW_PRESETS,
                   "description": "Must be one of the Edge UI's own preset buttons"}
 
+def tool_fetch_engine_backlog(environment: str, hours: int = 6, limit: int = 8) -> str:
+    """Per-engine backlog for an "Engine backlog critical" alert.
+
+    Reads the same endpoint the Edge UI "Backlog" card draws
+    (/proc/jobs/backlog_count_by_engine), so the numbers match what a human sees
+    on https://processing.<env>.aiware.run/processing/jobs/ — but as numbers,
+    which that card cannot give you: it is an ApexCharts SVG whose only readable
+    text is the engine-name legend.
+    """
+    env = _env(environment)
+    hours = max(1, min(int(hours), 72))
+    end = int(time.time())
+    start = end - hours * 3600
+    try:
+        rows = edge_api.fetch_backlog_by_engine(env, start, end)
+    except Exception as e:                              # noqa: BLE001
+        return f"BACKLOG LOOKUP FAILED — {type(e).__name__}: {str(e).splitlines()[0]}"
+    if not rows:
+        return (f"No backlog series returned for {env.key} over the last {hours}h. Say that "
+                f"rather than assuming the backlog is zero — an empty response and an empty "
+                f"queue are different answers.")
+    with_backlog = [r for r in rows if r.peak > 0]
+    total_now = sum(r.now for r in rows)
+    total_peak = sum(r.peak for r in rows)
+    lines = [f"{env.key} backlog over the last {hours}h — {len(rows)} engine(s) tracked, "
+             f"{len(with_backlog)} with any backlog.",
+             f"TOTAL now {total_now} task(s), summed peak {total_peak}.",
+             "Worst by peak (now / peak / trend / priority):"]
+    for row in with_backlog[:max(1, min(int(limit), 25))]:
+        lines.append(f"  now {row.now:6}  peak {row.peak:6}  {row.trend:8}  "
+                     f"priority {row.priority:3}  {row.engine_name}")
+    if len(with_backlog) > limit:
+        lines.append(f"  ... {len(with_backlog) - limit} more engines with backlog; the totals "
+                     f"above cover all of them.")
+    climbing = [r.engine_name for r in with_backlog if r.trend == "climbing"][:5]
+    lines.append("Still climbing: " + (", ".join(climbing) if climbing else "none — every "
+                 "engine with backlog is flat or draining over this window"))
+    lines.append("`trend` is computed from the series' own two halves, not first-vs-last. "
+                 "`priority` is the engine's queue priority (lower runs first).")
+    return "\n".join(lines)
+
+
+def tool_capture_backlog_screenshot(environment: str, engine: str = "", minutes: int = 360,
+                                    key: str = "") -> str:
+    """Screenshot the Edge UI "Backlog" card itself, for the thread.
+
+    The card is `div.ant-card` whose `.ant-card-head-title` reads "Backlog" on
+    /processing/jobs/ (verified 2026-08-31). Captured as an element clip rather
+    than a full page, so the thread gets the chart and not the whole dashboard.
+    """
+    env = _env(environment)
+    suffix = "_" + re.sub(r"[^a-z0-9]+", "_", engine.lower()).strip("_") if engine else ""
+    key = key or f"edge_backlog_{env.key}{suffix}".replace("-", "_")
+    out_path = EVIDENCE_DIR / f"{key}.png"
+    try:
+        # Reuses the per-environment logged-in page, like every other capture
+        # tool here — one login per run, not one per screenshot.
+        isolated = screenshot.capture_backlog_card(
+            _get_page(environment), out_path,
+            edge_environments.to_ui_base_url(env), engine=engine, minutes=minutes)
+    except Exception as e:                              # noqa: BLE001
+        return f"CAPTURE FAILED — {type(e).__name__}: {str(e).splitlines()[0]}"
+    if engine:
+        caption = (f"Edge UI {env.key} — Backlog for {isolated['engine']} only, last {minutes}m")
+        if isolated.get("same_name_series", 1) > 1:
+            caption += (f" (one of {isolated['same_name_series']} series named "
+                        f"{isolated['engine']} — they differ by queue priority)")
+    else:
+        caption = f"Edge UI {env.key} — Backlog card, all engines, last {minutes}m"
+    _record(key, out_path, caption)
+    return (f"OK — captured {out_path.stat().st_size} bytes.\nevidence_key: {key}\n"
+            f"caption: {caption}\nCite \"{key}\" in a post's evidence_keys to attach it.")
+
+
 TOOLS = [
     {"name": "fetch_engine_task_stats",
      "description": "Per-engine task counts (completed/failed/pending/etc.) for a window in one "
@@ -329,6 +404,26 @@ TOOLS = [
      "description": "The aiw-xxx environment keys configured with Edge UI credentials.",
      "inputSchema": {"type": "object", "properties": {}},
      "handler": tool_list_environments},
+    {"name": "fetch_engine_backlog",
+     "description": "Per-engine backlog counts (now, peak, trend, priority) for an 'Engine "
+                    "backlog critical' alert — the numbers behind the Edge UI Backlog card. "
+                    "Start here for a backlog alert; the card itself has no readable numbers.",
+     "inputSchema": {"type": "object", "properties": {
+         "environment": {"type": "string"}, "hours": {"type": "integer"},
+         "limit": {"type": "integer"}}, "required": ["environment"]},
+     "handler": tool_fetch_engine_backlog},
+    {"name": "capture_backlog_screenshot",
+     "description": "Screenshot the Edge UI 'Backlog' card on /processing/jobs/. Pass "
+                    "`engine` to show ONLY that engine — it clicks the engine's name in the "
+                    "chart legend, which isolates that series, and refuses to save anything "
+                    "if the isolation did not take. Prefer that over the all-engines view: "
+                    "the alert is about one engine, and the full card is ~36 overlapping "
+                    "lines nobody can read.",
+     "inputSchema": {"type": "object", "properties": {
+         "environment": {"type": "string"}, "engine": {"type": "string"},
+         "minutes": {"type": "integer"}, "key": {"type": "string"}},
+         "required": ["environment"]},
+     "handler": tool_capture_backlog_screenshot},
     {"name": "capture_tasks_page_screenshot",
      "description": "Screenshot the Edge UI Tasks page filtered to one engine + window, for "
                     "attaching to the Slack thread. Logs in automatically on first use per "

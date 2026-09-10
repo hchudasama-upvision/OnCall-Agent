@@ -41,30 +41,6 @@
     ]
   },
   {
-    "fingerprint": "AlbUnhealthyHostCritical/us-1-prod",
-    "alertname": "AlbUnhealthyHostCritical",
-    "alert_pattern": "[FIRING:1] us-1 : prod - AlbUnhealthyHostCritical",
-    "environment": "us-1 prod (haproxy/api target groups)",
-    "occurrences_observed": 1,
-    "typical_resolution_minutes": 10,
-    "diagnosis_steps": [
-      "Identify the target group (observed: the prod haproxy api http target group)",
-      "Check if the unhealthy target is a NEWLY LAUNCHED instance (autoscaling event) - post the target-health screenshot"
-    ],
-    "resolution_steps": [
-      "If newly launched: wait for warm-up; observed healthy within ~9 minutes with no action",
-      "Post the healthy-state screenshot; resolved"
-    ],
-    "gotchas": [
-      "Do not act in the first 5-10 minutes for fresh instances; most resolve on their own",
-      "If it stays unhealthy past warm-up, check the service on the health-check port and instance system log"
-    ],
-    "escalation": "None for warm-up cases",
-    "example_commands": [
-      "aws elbv2 describe-target-health --target-group-arn <arn>"
-    ]
-  },
-  {
     "fingerprint": "ApiSuccessRate-nginx/*",
     "alertname": "API Success Rate - nginx",
     "alert_pattern": "[FIRING:1] <env> - API Success Rate - nginx <cluster/platform>",
@@ -92,6 +68,160 @@
     "example_commands": [
       "log query: upstreamStatus >= 500 and upstreamStatus <= 599",
       "kubectl get pods -n <ns> | grep <upstream> (check restart counts/ages)"
+    ]
+  },
+  {
+    "fingerprint": "ApiResponseCodes/api-services-overview",
+    "alertname": "Response Codes / API Success Rate (API Services - Overview)",
+    "alert_pattern": "<REGION>-Prod Response Codes - nginx -ai13s   aiWARE/prod   (also: - haproxy, UK-Prod, Azure Prod, Azure Stage, DMH CrUX, DMH Core)",
+    "environment": "every aiWARE API ingress \u2014 the one dashboard carries US/UK/Azure prod+stage and both DMH stacks",
+    "occurrences_observed": 0,
+    "typical_resolution_minutes": 10,
+    "dashboard": {
+      "_verified": "uid, panel ids, titles, datasource, the success-rate formula and every panel pair re-read live on 2026-08-28; owner pinned this dashboard the same day",
+      "name": "API Services - Overview",
+      "uid": "da6b8dc3-ecd3-4b8c-b7e4e",
+      "panels": "Each environment is a PAIR: a response-codes timeseries and a success-rate stat \u2014 SCREENSHOT BOTH, and take the number from the stat. 25+26 US-Prod nginx -ai13s; 16+12 US-Prod haproxy; 15+14 UK-Prod nginx; 27+28 Azure Prod -ai13s; 29+30 Azure Stage -ai13s; 9+10 DMH CrUX; 23+24 DMH Core. The ALERT NAME IS THE PANEL TITLE, so Agents/Grafana_Agent/api_health.find_panel_pair() resolves it live rather than from this list.",
+      "variables": {
+        "var-upstreamNamesAll": "a dashboard CONSTANT listing the four core upstreams (graphql, search, admin, media-streamer) \u2014 nothing to set per alert"
+      },
+      "from": "now-1h",
+      "gotcha": "These panels are ELASTICSEARCH-backed (datasource es-nginx-prod \u2192 elasticsearch-elk-lb.aws-prod.veritone.com), NOT Prometheus \u2014 prometheus_query will not answer anything here. The success rate is the panel's own math: 1 - 5XX/(2XX+5XX+4XX+NEG), unit percentunit with 4 decimals, so 0.9999 shows as 99.99%. Pair the panels by region AND by the -ai13s marker: US-Prod haproxy pairs with panel 12 (Prod - API Success Rate), NOT panel 26 (the -ai13s ingress) \u2014 that mispairing was a real bug found on 2026-08-28."
+    },
+    "diagnosis_steps": [
+      "Screenshot BOTH panels for the environment the alert names (owner's direction, 2026-08-28): the success-rate stat, which renders as one big 4-decimal number, and the response-codes timeseries, whose legend carries per-code totals (2XX, 4XX, 500, 502, 503, 504, 401, 404 \u2026). The stat says how bad; the timeseries says which codes moved. Two images is deliberate here and overrides the usual one-panel economy.",
+      "State the success rate from the PAIRED stat panel, not from the picture. 4 decimals: the threshold that matters is 99.99%, so 99.97% and 99.9972% are different answers.",
+      "Say which codes actually moved. A 4xx spike with 5xx flat is a client or auth problem, not a platform outage \u2014 the success-rate formula only counts 5xx against you.",
+      "Check whether a deploy is in flight (#prod-deploy) before treating it as infrastructure \u2014 per DESIGN.md \u00a72 this alert family's first runbook step is to wait 5-10 minutes for self-heal."
+    ],
+    "resolution_steps": [
+      "Most occurrences self-heal within 5-10 minutes. The agent re-checks automatically (follow_up.py) and posts the recovered success rate plus a fresh screenshot into the same thread \u2014 do NOT promise a manual re-check or ask a human to watch it.",
+      "If it has NOT recovered by the final re-check, the thread carries the current rate and the graph; a human takes it from there."
+    ],
+    "gotchas": [
+      "The re-check threshold (99.99%) and its timing are CODE decisions in follow_up.py/api_health.py, not yours \u2014 report what you measured and let the automation post the second look.",
+      "An empty window is not a 100% success rate. api_health.success_rate() raises on zero requests rather than reporting perfection; say 'no data' if that happens.",
+      "'API Success Rate - nginx' (the ApiSuccessRate-nginx/* case in this same file) is a DIFFERENT investigation \u2014 that one is a log dive into upstream 5xx by proxyUpstreamName. This entry is the dashboard family."
+    ],
+    "escalation": "aiWARE platform team if 5xx stays elevated past the self-heal window; the deploying team if it lines up with a rollout",
+    "example_commands": [
+      "python -m oncall_agent.Agents.Grafana_Agent.api_health \"US-Prod Response Codes - nginx -ai13s\"",
+      "FOLLOW_UP_MINUTES=0.2 python py/scripts/replay_alert.py --dry-run --incident \"<the alert line>\""
+    ]
+  },
+  {
+    "fingerprint": "EndpointDown/ops-prom",
+    "alertname": "EndpointDown",
+    "alert_pattern": "Alert: ops-prom : EndpointDown   (env=ops-prom, monitor=OpsProm, namespace=central-monitoring)",
+    "environment": "central monitoring (OpsProm synthetic endpoint probes across every env, incl. third-party and customer-facing URLs)",
+    "occurrences_observed": 0,
+    "typical_resolution_minutes": 0,
+    "_owner_direction": "2026-08-31: post WHICH endpoint is down in #comms-noc; the fix stays a human's, because the first question is whether an ITSM change or recent work explains it. The agent's job is naming the endpoint, the failure mode, and what the change channels say \u2014 not acting.",
+    "diagnosis_steps": [
+      "endpoint_status (noc_grafana) \u2014 the alert series carries everything: the `url` probed, the `status` it returned vs `expected_status_code`, `total_time`, and the TLS fields. Name the endpoint in the thread; that is the whole point of the post.",
+      "Read the failure mode off `status`, do not infer it: `CONNECTION_ERROR` with `total_time` `0.000` means nothing answered at all, while a numeric `status` that simply differs from `expected_status_code` (e.g. got `404`, expected `302`) means the endpoint IS up and returning the wrong thing \u2014 a different problem with a different owner.",
+      "Note `alertstate`: several EndpointDown series sit in `pending` rather than `firing`. A pending probe has not met its `for:` duration yet.",
+      "Check TLS while you are there \u2014 `cert_available=ERROR` alongside a connection error often IS the cause, and `cert_expiry_days` is a countdown worth stating if it is small.",
+      "search_recent_changes (noc_slack) on the endpoint's HOST \u2014 was a deploy, maintenance window or ITSM change announced? An endpoint down inside its own maintenance window is not an outage. If CHANGE_CHANNELS is unconfigured or unreadable, say the check was unavailable; never report that as 'no change found'.",
+      "Check #comms-noc history for this same URL \u2014 these probes cover third-party and customer-facing endpoints that have their own chronic patterns."
+    ],
+    "resolution_steps": [
+      "Post the endpoint, the failure mode and what the change channels said. Then stop: the action is a human's (owner's direction, 2026-08-31), because deciding between 'wait for the change window', 'chase the endpoint owner' and 'this is a real outage' needs the ITSM context the NOC engineer has and the agent does not."
+    ],
+    "gotchas": [
+      "MONITORED URLS CAN CARRY LIVE CREDENTIALS. A real firing series on 2026-08-31 probed a workflow URL with an `authToken=` in its query string. endpoint_status redacts credential-bearing query VALUES before you ever see them \u2014 quote the URL exactly as the tool returns it and never reconstruct the original.",
+      "`environment` on this alert is not an environment name \u2014 it is a Route53 hosted-zone id (Z04938931Y28CFARQSX47) or a synthetic test-suite name ('Media Ingest - Specific Tests'). Do not present it as an aiWARE env.",
+      "One firing alert usually means several endpoints: 6 were down simultaneously on 2026-08-31, two of them Jenkins (jenkins.veritone.com and jenkins.us-1.veritone.com). Group them \u2014 a shared cause across endpoints is the finding, not six separate lines.",
+      "`instance` is always `localhost:9100` (the probe host, node-exporter), never the target. The target is `url`."
+    ],
+    "escalation": "The endpoint's owning team once the endpoint is named; NOC decides after checking change context",
+    "example_commands": [
+      "ALERTS{alertname=\"EndpointDown\", alertstate=\"firing\"}",
+      "count by (status) (ALERTS{alertname=\"EndpointDown\"})"
+    ]
+  },
+  {
+    "fingerprint": "PromQLRuleHigh/core-services",
+    "alertname": "High concurrent_requests / High nodejs_active_handles",
+    "alert_pattern": "aiw:<env> - High concurrent_requests for core-admin-server  (also core-graphql-server; and the nodejs_active_handles variant)",
+    "environment": "aiWARE core services per env \u2014 real rules exist for aiw-zpfc02 and aiw-wpsc01",
+    "occurrences_observed": 0,
+    "typical_resolution_minutes": 0,
+    "_owner_direction": "2026-08-31: simple one \u2014 open https://thanos.ops.veritone.com, run the query, screenshot it periodically, and post 'Concurrent request: <number>' with an explanation of whether it is still high or low again.",
+    "thanos": {
+      "_verified": "rules, thresholds and the UI screenshot all read live on 2026-08-31",
+      "url": "https://thanos.ops.veritone.com \u2014 reachable with NO auth from this machine; not the same host as thanos-grafana.ops.veritone.com",
+      "rules_api": "/api/v1/rules?type=alert \u2014 the ALERT TITLE IS THE RULE NAME, so the threshold and the exact selector are a lookup, never a guess",
+      "real_rules": "aiw:zpfc02 - High concurrent_requests for core-admin-server -> concurrent_requests{env=\"aiw-zpfc02\",job=\"core-admin-server-service\"} > 10, for 5m; core-graphql-server > 200; wpsc01 core-graphql-server > 120; nodejs_active_handles_total{...core-admin-server-service} > 100; core-graphql-server > 400",
+      "tools": "thanos_alert_status for the rule + value + duration, thanos_graph for the UI screenshot",
+      "gotcha": "THE INSTANCE IN THE ALERT GOES STALE. The example instance 10.244.188.5:9000 returned an EMPTY vector \u2014 pod IPs churn and that pod is gone. resolve_series falls back to the rule's own selector and says it did; report the service's current pods and note the substitution, rather than 'no data' for a service that is fine. Note the metric is nodejs_active_handles_TOTAL in the rule even though the alert says nodejs_active_handles."
+    },
+    "diagnosis_steps": [
+      "thanos_alert_status(alert_name=<the alert title>) FIRST. It returns the rule's own threshold and `for` duration, the current value per pod, and how long the metric has been above or below the threshold.",
+      "Post the number the way the owner asked: 'Concurrent request: <n>' \u2014 then the explanation, which the tool phrases from the series: 'high for 2h10m', 'low again, came back below 12m ago', or 'never reached the threshold in the last 6h'.",
+      "thanos_graph(expr=<the rule's own expression>) for the picture. It captures the real Thanos UI with the query bar in frame, so the graph carries its own provenance.",
+      "If several pods report, name the worst and say how many are reporting \u2014 a single hot pod and a whole service at the threshold are different incidents.",
+      "Check #comms-noc for this service: a service that touches this threshold every afternoon is a threshold problem, not an incident."
+    ],
+    "resolution_steps": [
+      "Post the number, the duration and the graph. Nothing else: the action is a human's, and for these two metrics it is usually either 'wait, it is already draining' or an application decision about concurrency limits.",
+      "Further captures are posted automatically at +5 and +10 minutes (follow_up.py, kind `thanos_usage`) so the thread shows whether it is still climbing. Do not promise a re-check."
+    ],
+    "gotchas": [
+      "A bare number means nothing without the threshold. `1` is fine for core-admin-server (threshold 10) and would be nothing for core-graphql-server (threshold 200) \u2014 always quote both.",
+      "The rule's `for: 5m` means the alert only fires after five minutes above the line, so by the time it arrives the condition has already been true for at least that long.",
+      "Both metric families are per-pod gauges. Aggregating with max() is what the duration analysis uses; sum() across pods would cross the threshold when no single pod ever did."
+    ],
+    "escalation": "The service owner for the named core service; these are aiWARE platform components",
+    "example_commands": [
+      "curl -sG https://thanos.ops.veritone.com/api/v1/query --data-urlencode 'query=concurrent_requests{env=\"aiw-zpfc02\",job=\"core-admin-server-service\"}'",
+      "curl -s 'https://thanos.ops.veritone.com/api/v1/rules?type=alert' | grep -o 'High concurrent_requests[^\"]*'"
+    ]
+  },
+  {
+    "fingerprint": "HostUtilizationCritical/pandologic-esxi",
+    "alertname": "HostCPUUtilizationCritical / HostMemoryUtilizationCritical",
+    "alert_pattern": "PandoLogic - HostCPUUtilizationCritical (<cluster> <datacenter> <ESXi host> <exporter host> vmware_vcenter critical n/a)",
+    "environment": "PandoLogic VMware estate \u2014 the rules scope to RealMatch-Cluster01 and RealMatch-Cluster03",
+    "occurrences_observed": 0,
+    "typical_resolution_minutes": 0,
+    "_owner_direction": "2026-08-31: this is a Grafana alert \u2014 use the VMware ESXi dashboard for the named ESXi host, and put CPU usage screenshots at different times.",
+    "dashboard": {
+      "_verified": "dashboard, variable and every panel id/query re-read live on 2026-08-31; the Thanos rules were read the same day",
+      "name": "VMware ESXi",
+      "uid": "ead34884-4dca-4c80-bff3-a3aac2c4dc34",
+      "panels": "17 \u2014 Host CPU usage | $esxhost (timeseries, THE one for a CPU alert); 12 \u2014 Host CPU Usage (gauge, the number now); 18 / 13 \u2014 the Host Memory usage pair for the memory variant; 42 \u2014 Host's VM CPU usage (which guests are driving it, the root-cause panel); 39 \u2014 Host Cpu Contention (cpu ready)",
+      "variables": {
+        "var-esxhost": "the ESXi host FQDN = label index 2 = the series' host_name"
+      },
+      "from": "now-15m",
+      "gotcha": "THE ALERT NAMES TWO FQDNs AND ONLY THE FIRST IS THE SUBJECT. Label 2 (ny1esx9679.verimatch.com) is the ESXi host and is what $esxhost wants; label 3 (ny1wv5840.verimatch.com) is the vmware_exporter that scrapes vCenter \u2014 it appears as the series' `instance` label on EVERY host's series, so graphing it would chart the wrong machine. Verified against a live series 2026-08-31."
+    },
+    "thanos_rule": {
+      "cpu": "(vmware_host_cpu_usage{cluster_name=~\"RealMatch-Cluster01|RealMatch-Cluster03\"} / vmware_host_cpu_max) * 100 > 85, for 10m",
+      "memory": "(vmware_host_memory_usage{...same clusters...} / vmware_host_memory_max) * 100 > 85, for 10m",
+      "note": "Both are real rules in Thanos (group `node.rules`), so thanos_alert_status returns the threshold and how long the host has been above or below it \u2014 use it for the duration wording instead of estimating. Observed 2026-08-31: ny1esx9679 CPU 27.76% (peak 42.81% in 15m), ny1wv5840 memory 77.81% against the same 85% line."
+    },
+    "diagnosis_steps": [
+      "thanos_alert_status(alert_name='HostCPUUtilizationCritical') for the rule's own threshold (85%, for 10m) and how long this host has been above or below it. The rule aggregates per host, so name the host from the alert's label 2.",
+      "render_panel on the VMware ESXi dashboard, panel 17, var-esxhost=<label 2>, from=now-15m \u2014 the CPU usage timeseries for that host specifically.",
+      "Panel 42 ('Host's VM CPU usage') is the root-cause panel: it breaks the host's CPU down by guest VM, which is how you tell 'one runaway VM' from 'the host is simply full'. Render it only if the first two leave the question open.",
+      "Check panel 39 (Cpu Contention / cpu ready) when CPU is high but the guests look idle \u2014 contention means the host is oversubscribed rather than busy.",
+      "Check #comms-noc for this ESXi host: a host that touches 85% every night is a capacity conversation, not an incident."
+    ],
+    "resolution_steps": [
+      "Post the current percentage against the 85% threshold, how long it has been there, and the CPU usage panel for that host. The action is a human's \u2014 vMotion, resizing a guest or adding capacity are all decisions with cost.",
+      "Further CPU-usage captures are posted automatically at +5 and +10 minutes (follow_up.py, kind `thanos_usage`, which uses this mapped panel), so the thread shows the shape over time. Do not promise a re-check."
+    ],
+    "gotchas": [
+      "vmware_host_cpu_usage is raw MHz, not a percentage. The rule and panel 17 both divide by vmware_host_cpu_max \u2014 a bare `vmware_host_cpu_usage` value (e.g. 19835) is not 19835%.",
+      "The rules cover Cluster01 and Cluster03 only. An alert naming Cluster02 has no matching rule, so there is no threshold to quote \u2014 say so rather than assuming 85%.",
+      "`n/a` is a real label value here (the `tags` label), not a parsing failure."
+    ],
+    "escalation": "The VMware/infrastructure owner for the PandoLogic estate",
+    "example_commands": [
+      "curl -sG https://thanos.ops.veritone.com/api/v1/query --data-urlencode 'query=(vmware_host_cpu_usage{host_name=\"ny1esx9679.verimatch.com\"} / vmware_host_cpu_max) * 100'",
+      "https://thanos-grafana.ops.veritone.com/d/ead34884-4dca-4c80-bff3-a3aac2c4dc34/vmware-esxi?var-esxhost=ny1esx9679.verimatch.com&from=now-15m&to=now"
     ]
   },
   {
@@ -142,37 +272,97 @@
       "Response is slower than infra alerts because it waits on the DB owner - ack the incident to stop escalation"
     ],
     "escalation": "DB owner (required); their DB escalation rotation for the SQL servers",
-    "example_commands": []
+    "example_commands": [],
+    "_see_also": "DiskSpaceUtilization/pandologic-windows in this same file is the general per-host Windows disk entry (dashboard, panels, PromQL, label order). This entry is the narrower thing: what changes when the host is a DB-owned SQL box."
   },
   {
-    "fingerprint": "EngineBacklogCritical/*",
-    "alertname": "Engine backlog critical for 30m",
-    "alert_pattern": "[FIRING:1] <cluster> : Engine backlog critical for 30m",
-    "environment": "any aiWARE edge cluster",
-    "occurrences_observed": 4,
-    "typical_resolution_minutes": 90,
+    "fingerprint": "DiskSpaceUtilization/pandologic-windows",
+    "alertname": "DiskSpaceUtilizationWarning / DiskSpaceUtilizationCritical (windows_exporter)",
+    "alert_pattern": "[FIRING:1] PandoLogic - <HOST> DiskSpaceUtilizationWarning|Critical (pandologic <ip>:9182 windows_exporter <severity> <HOST> <drive>: windows_exporter)",
+    "environment": "PandoLogic Windows fleet, windows_exporter via Thanos (env=pandologic). 177 hosts report windows_os_hostname as of 2026-08-26",
+    "occurrences_observed": 3,
+    "typical_resolution_minutes": 60,
+    "dashboard": {
+      "_verified": "uid and panel ids come from config/panel_map.json (already confirmed to render); panel titles, panel queries and the $host variable query re-read live on 2026-08-26",
+      "name": "10. General Windows Host Metrics Overview",
+      "uid": "rvykW6zZk",
+      "panels": "33 \u2014 Disk (Free) | $host (timeseries, every drive on the host); 11 \u2014 Disk Use (gauge); 23 \u2014 Disk (Free) (table, per-drive \u2014 the fastest way to show the alerting drive next to its siblings)",
+      "variables": {
+        "var-job": "windows_exporter",
+        "var-host": "<instance, i.e. <ip>:9182 \u2014 NOT the hostname>"
+      },
+      "from": "now-6h",
+      "gotcha": "Two traps. (1) $host is an INSTANCE, not a hostname \u2014 its variable query is label_values(windows_os_time{job=~\"$job\"},instance), so it wants '10.60.4.120:9182'. The alert gives you both: take the instance label directly, or resolve windows_os_hostname{hostname=\"<HOST>\"} \u2192 instance. (2) NO panel here filters by drive letter \u2014 panel 33's query is windows_logical_disk_free_bytes{instance=~\"$host\", volume !~ \"(HarddiskVolume.+|[A-Z]:.+)\"}, i.e. all drives. So the picture will not point at the alerting drive: name it in your text."
+    },
     "diagnosis_steps": [
-      "Identify WHICH engine(s) have backlog and post engine name + ID + backlog size in thread",
-      "Pull recent task errors for that engine - error signatures observed: input asset 404 (bad jobs), unsupported input format sent by client, provider throttling (ProvisionedThroughputExceeded on cloud OCR), engine build too old for the input",
-      "Check pod health for that engine - if pods are fine, backlog is workload/task-level, not infra",
-      "Check for known causes: load testing in progress, bulk submissions, upstream change threads - link them",
-      "Identify the submitting org for bad-job floods (org ID from task records)"
+      "Read the labels in order (verified against a real fire): pandologic | <ip>:9182 | windows_exporter | <severity> | <HOST> | <drive>: | windows_exporter. Real line: '[FIRING:1] PandoLogic - SQL41 DiskSpaceUtilizationWarning (pandologic 10.60.4.41:9182 windows_exporter warning SQL41 J: windows_exporter)'.",
+      "Note the host is rendered INTO the alertname \u2014 the parsed alert name is 'SQL41 DiskSpaceUtilizationWarning', not the bare Alertmanager name. Match on the suffix; do not conclude the alert type is unknown.",
+      "Post the numbers the way the channel does \u2014 percentage AND absolute free space ('90%, 30GB free of 300GB'): 100 * (1 - windows_logical_disk_free_bytes{instance=\"<ip>:9182\", volume=\"<D:>\"} / windows_logical_disk_size_bytes{instance=\"<ip>:9182\", volume=\"<D:>\"}).",
+      "Check the 6h trend, not just the level. A drive that dropped 50GB in an hour is a different thread from one that has been parked at 91% for a month.",
+      "If the host is a SQL* box, the DB-owner rule from DiskSpaceUtilizationCritical-SQL/pandologic applies: notify the DB owner, and do not propose expansion or cleanup as if it were the NOC's call."
     ],
     "resolution_steps": [
-      "Workload-explained (load test, bulk run): document the cause link, monitor drain, resolved",
-      "Bad input jobs (404 assets): confirm the asset URL actually 404s (HEAD request), then escalate to identify the submitter; engines are innocent",
-      "Provider throttling: backlog drains as retries succeed; flag quota increase to the cloud account owner",
-      "Engine-code failures: escalate to engine team (they may need to deploy newer builds); NOC cannot fix engine internals",
-      "'All pods running + backlog draining' cases: just monitor to completion"
+      "PROPOSE (read-only, always): cleanup or expansion, and say which you think fits and why. The host/DB owner decides.",
+      "Warning and Critical are separate alertnames on the same drive. A Warning that keeps re-firing on one drive is a capacity/retention problem worth raising once, not a fresh investigation each time.",
+      "Post the panel plus one line naming host, drive and % used; that is the whole thread for a clean case."
     ],
     "gotchas": [
-      "Backlog alerts often accompany KubePodsNotReady on the same cluster - resolve pods first, backlog usually follows",
-      "A huge backlog of FAILING tasks (not slow ones) will not drain by waiting - an 'Engine failure rate above 15%' alert alongside means tasks are dying, not queued",
-      "Engineers outside NOC may only be able to diagnose, not fix (build deployments owned by another team) - set expectations in thread"
+      "The drive letter arrives as a `volume` label, and windows_logical_disk_* also reports pseudo-volumes that are not drives (verified: 10.60.4.120:9182 reports C:, D: and HarddiskVolume1). Filter those out or the drive count and any total you compute will be wrong.",
+      "windows_os_hostname also carries a vm_name label, so a Windows host that is a VMware guest can be found on the VMware VM dashboard (uid 6195d31f-8b29-4ca3-843f-89dcf35427d8) by vm_name \u2014 worth checking when a disk alert lands alongside a VM ActiveRedAlarms fire on the same box.",
+      "Not every Windows host exports every metric. Confirm the series exists for THIS instance before rendering; an absent metric means no graph, and saying that plainly beats attaching an empty panel.",
+      "You are read-only: you can show the drive filling, not clear it."
     ],
-    "escalation": "Engine team for engine-internal failures; SRE for cluster-level causes; app owner for bad submissions",
+    "escalation": "Host/app owner. DB owner is REQUIRED for the SQL* servers \u2014 see DiskSpaceUtilizationCritical-SQL/pandologic",
     "example_commands": [
-      "curl -I <asset-url> (verify 404 on bad-job inputs)"
+      "windows_os_hostname{hostname=\"SVC120\"}   (\u2192 instance=10.60.4.120:9182)",
+      "100 * (1 - windows_logical_disk_free_bytes{instance=\"10.60.4.120:9182\", volume=\"D:\"} / windows_logical_disk_size_bytes{instance=\"10.60.4.120:9182\", volume=\"D:\"})",
+      "sort_desc(windows_logical_disk_free_bytes{instance=\"<ip>:9182\", volume=~\"(^[A-Z]:$)\"})"
+    ]
+  },
+  {
+    "fingerprint": "KubePersistentVolumeFillingUp/*",
+    "alertname": "KubePersistentVolumeFillingUp",
+    "_shared_with": "Agents/K8S_Agent/data/cases.json carries this same alert type. Routing (config/specialist_routing.json) still sends KubePersistentVolumeFillingUp to the kubernetes specialist; the owner's call (2026-08-26) was that BOTH agents keep a copy, so this is the graph-side view for when the Grafana/metrics specialist gets it. The K8S copy is the pod/PVC-lifecycle view. Edit both or they drift.",
+    "alert_pattern": "[FIRING:1] <env> : KubePersistentVolumeFillingUp (kubelet <namespace> <volume> <env> <severity>)",
+    "environment": "any aiWARE k8s cluster. Real fires seen on aiw-stg198 (groundcover/clickhouse), aiw-prd5001 (postgres pgdata), aiw-wpsc01 (redis replicas)",
+    "occurrences_observed": 1,
+    "typical_resolution_minutes": 27,
+    "dashboard": {
+      "_verified": "uid and panel ids come from config/panel_map.json (already confirmed to render); panel titles, panel queries and template variables re-read live on 2026-08-26",
+      "name": "ai13s - Kubernetes / Persistent Volumes",
+      "uid": "9192a8e8041bd567",
+      "panels": "2 \u2014 Volume Space Usage (gauge: where it is NOW); 1 \u2014 Volume Space Usage (timeseries: whether it is climbing); 6 \u2014 PVC Storage Usage Rate / PVC Data Growth Rate (5m): the one that answers 'will it actually reach 100%, and when'",
+      "variables": {
+        "var-env": "<the env label \u2014 also the alert's own environment key>",
+        "var-namespace": "<the namespace label>",
+        "var-volume": "<the volume label = the PVC name>"
+      },
+      "from": "now-6h",
+      "gotcha": "Panels 1 and 2 filter on cluster=\"$cluster\" (EXACT match) and panel_map deliberately leaves var-cluster unset. That is correct, not an omission: these Thanos series carry no cluster label at all (verified 2026-08-26), and an empty $cluster matches an absent label. Do NOT 'helpfully' pass a cluster name you inferred \u2014 an exact match on a non-empty value matches nothing and you get an empty panel."
+    },
+    "diagnosis_steps": [
+      "Read the labels in order: kubelet | <namespace> | <volume/PVC name> | <env> | <severity>.",
+      "Get the real number BEFORE rendering: 100 * (1 - kubelet_volume_stats_available_bytes{env=\"<env>\", persistentvolumeclaim=\"<volume>\"} / kubelet_volume_stats_capacity_bytes{env=\"<env>\", persistentvolumeclaim=\"<volume>\"}). Post % used and absolute free GB.",
+      "Check whether it is still filling \u2014 rate(kubelet_volume_stats_used_bytes{...}[30m]), or panel 6. A PVC at 85% and flat is a different thread from one at 85% and climbing.",
+      "Check what writes to it: transcode/scratch and log/observability volumes (groundcover, clickhouse) fill during big jobs and MAY self-recover when the job finishes.",
+      "Check the runbook link embedded in the alert (Runbook: KubePersistentVolumeFillingUp \u2014 Resizing PVCs)."
+    ],
+    "resolution_steps": [
+      "PROPOSE, never do it: resize the PVC upward per the resizing-PVCs runbook. Observed on a real fire: +50GB on a volume at ~8% free took it to ~39% free.",
+      "If it has already drained by the time you look, say so and recommend ack + resolve instead of opening an investigation.",
+      "Post the gauge and the trend, with one line above them naming env, namespace, volume and % used."
+    ],
+    "gotchas": [
+      "PVCs only grow, never shrink \u2014 a resize is permanent cost. That is exactly why it is a human's decision and appears in proposed_action, not in what you did.",
+      "Real fires land on both ends of the range: the aiw-stg198 groundcover clickhouse shard has been genuinely ~86% used, while an aiw-prd5001 postgres pgdata fire was under 5% used by the time anyone looked. Read the number before writing the narrative.",
+      "The volume label is the PVC name, not the pod name \u2014 a PVC outlives the pod that filled it.",
+      "Ack the VictorOps incident early so it does not escalate while you work."
+    ],
+    "escalation": "App owner if the same PVC needs resizing repeatedly \u2014 that is a retention/leak problem, not a capacity one",
+    "example_commands": [
+      "100 * (1 - kubelet_volume_stats_available_bytes{env=\"aiw-stg198\", persistentvolumeclaim=\"data-groundcover-clickhouse-shard0-0\"} / kubelet_volume_stats_capacity_bytes{env=\"aiw-stg198\", persistentvolumeclaim=\"data-groundcover-clickhouse-shard0-0\"})",
+      "sum by (persistentvolumeclaim) (rate(kubelet_volume_stats_used_bytes{env=\"<env>\"}[30m]))",
+      "kubectl get pvc <name> -n <ns>   (for the human \u2014 you have no kubectl)"
     ]
   },
   {
@@ -183,9 +373,10 @@
     "occurrences_observed": 3,
     "typical_resolution_minutes": 10,
     "diagnosis_steps": [
-      "Read the triggeredAlarm field: which alarm (CPU/memory), which VM/host/volume",
-      "Check whether the alarm coincides with a scheduled job (nightly backups have appeared inside the alarm text: 'Last Backup successfully completed at ...')",
-      "Check current host CPU/memory on the VMware dashboard"
+      "Read the labels: n/a | triggeredAlarm:<VmCPU|VmMemory>UsageAlarm | <cluster> | <datacenter> | <datastore> | pandologic | <esx fqdn> | <exporter fqdn> | vmware_vcenter | <severity> | n/a | <VM NAME>. The VM name is the LAST value.",
+      "Render panels 17 (CPU), 18 (memory) and 48 (disk) for that VM \u2014 three images, and they carry the thread.",
+      "top_processes(host=<VM name>) for the top 5 by CPU and by memory. State which source answered (exporter vs login) because the CPU unit differs between them.",
+      "Keep the text to a compact field block: VM, alarm, cluster/host, current CPU and memory percentages, and the top processes. No narrative."
     ],
     "resolution_steps": [
       "Backup/scheduled-job spikes: self-resolve; observed incidents auto-resolved within ~10 minutes (RESOLVED_BY: SYSTEM)",
@@ -193,10 +384,34 @@
     ],
     "gotchas": [
       "These frequently auto-resolve - the incident record often shows SYSTEM resolved it before anyone acted; don't over-invest in the first 10 minutes",
-      "Yellow (warning) variants of the same alarms are informational; track only if they recur"
+      "Yellow (warning) variants of the same alarms are informational; track only if they recur",
+      "The series itself carries the backup status in a Rubrik_LastBackup label ('Last Backup successfully completed at ...'), which is how a nightly-backup spike gets CONFIRMED rather than assumed."
     ],
     "escalation": "VMware/app owner for sustained alarms",
-    "example_commands": []
+    "example_commands": [
+      "vmware_vm_mem_usage_average{env=\"pandologic\", vm_name=\"<VM>\"} / 100   (the panel's own maths)",
+      "vmware_vm_cpu_usagemhz_average{env=\"pandologic\", vm_name=\"<VM>\"} / vmware_vm_max_cpu_usage{env=\"pandologic\", vm_name=\"<VM>\"} * 100"
+    ],
+    "dashboard": {
+      "_verified": "uid and panel ids come from config/panel_map.json (already confirmed to render); panel titles, panel queries and the $vm variable re-read live on 2026-08-26",
+      "name": "VMware VM",
+      "uid": "6195d31f-8b29-4ca3-843f-89dcf35427d8",
+      "panels": "RENDER ALL THREE for this alert type: 17 \u2014 VM CPU Usage, 18 \u2014 VM Memory usage, 48 \u2014 Disk Usage (all timeseries, var-vm=<the VM name>). panel_map already maps 18/17/48 for this alertname. 12/13 are the CPU/memory gauges if a number is wanted alongside.",
+      "variables": {
+        "var-vm": "<the VM NAME \u2014 the LAST label value in the alert>"
+      },
+      "from": "now-6h",
+      "gotcha": "Every query on this dashboard hardcodes env=\"pandologic\", so it covers the PandoLogic estate only (330 VMs report vmware_vm_mem_usage_average there, verified 2026-08-26). And the memory metric is percent\u00d7100 \u2014 panel 18 divides by 100, so a raw 1999 is 19.99%, not 1999%. Never quote the raw value as a percentage."
+    },
+    "_owner_direction": "2026-08-31: do not stop at one Grafana panel. Render CPU, MEMORY and DISK for the VM, name the top 5 processes by CPU and memory, and keep the text minimal.",
+    "processes": {
+      "_verified": "2026-08-31",
+      "tool": "top_processes(host=<VM name>) on noc_windows",
+      "prometheus_path": "93 Windows hosts run windows_exporter with the process collector, so per-process CPU and working-set memory are already in Thanos and need NO login. Verified on SVC182: top CPU `consul` 1.12% of one core, top memory `w3wp` 2701 MB.",
+      "gotcha_idle": "The `Idle` process is per-core idle time and sums to hundreds of percent (593.68% measured on SVC182) \u2014 it is excluded, and so is `_Total`. If you ever see either in a top list, the filter broke.",
+      "gotcha_units": "From Prometheus the CPU figure is a 5m RATE as percent of ONE core, so a multi-core host legitimately exceeds 100%. From WinRM it is CUMULATIVE CPU SECONDS since process start, which is a different quantity \u2014 quote whichever the tool labels.",
+      "no_exporter": "STG-Backend5 (the VM in the owner's alert) has NO exporter \u2014 no `windows_os_hostname` series at all. WinRM authenticates against it but the VM refuses to create a remote shell (`0x80070002` for every command, including `hostname` via cmd), which is a server-side WinRM shell-plugin setting. So for that host the process breakdown is UNAVAILABLE: say so, and do not infer a process from the CPU graph."
+    }
   },
   {
     "_STATUS": "DRAFT \u2014 assembled from what the agent itself discovered on real runs (2026-08-24/25). NOT confirmed by a human. Correct or delete anything wrong; the model is told to verify this, not obey it.",
@@ -210,8 +425,15 @@
       "_verified": "rendered successfully for SVC182 on 2026-08-25",
       "name": "2. Windows Server Details Dashboard - With Services",
       "uid": "Sad3g6Y2d",
-      "panel": "21 \u2014 Memory Utilization (gauge)",
-      "gotcha": "Panel 21 filters on $instance (e.g. 10.60.4.182:9182), NOT on $hostname. The alert only gives the hostname, so set $hostname AND resolve $instance first, or the gauge renders a green 'N/A' that looks like a real reading."
+      "panel": "21 \u2014 Memory Utilization (gauge). Add 14 \u2014 Memory Details (timeseries) when the question is whether it is climbing: a gauge cannot answer that.",
+      "gotcha": "Panel 21 filters on $instance (e.g. 10.60.4.182:9182), NOT on $hostname. The alert only gives the hostname, so set $hostname AND resolve $instance first, or the gauge renders a green 'N/A' that looks like a real reading.",
+      "_reverified": "2026-08-26, live: panel 21's query is 100 - (windows_os_physical_memory_free_bytes{job=~\"$job\",instance=~\"$instance\"} / windows_cs_physical_memory_bytes{job=~\"$job\",instance=~\"$instance\"})*100; still exactly 21 of 177 Windows hosts export windows_os_physical_memory_free_bytes and the host list below is unchanged; SVC183 still does not report. The escalate_to entry below is still an unfilled TODO.",
+      "variables": {
+        "var-job": "windows_exporter",
+        "var-hostname": "<HOST>",
+        "var-instance": "<ip>:9182"
+      },
+      "from": "now-6h"
     },
     "diagnosis_steps": [
       "Translate the hostname the alert gives you into the instance the panel needs: windows_os_hostname{hostname=\"<HOST>\"} returns instance=<ip>:9182.",

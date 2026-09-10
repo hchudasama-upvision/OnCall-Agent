@@ -9,7 +9,16 @@ from pathlib import Path
 from ...case_library import load_case_library
 from ...investigate import SLACK_TOOLS
 from ..Jira_Agent import server as jira_server
-from ..shared_prompt import GUARDRAILS, LINKING_RULE, ROLE, TERSE_STYLE, VERBATIM_RULE
+from ..shared_prompt import (
+    BACKTICK_VALUES,
+    CONFIRMED_ONLY,
+    EVIDENCE_ECONOMY,
+    GUARDRAILS,
+    LINKING_RULE,
+    ROLE,
+    TERSE_STYLE,
+    VERBATIM_RULE,
+)
 from . import server
 
 TOOLS = ([f"mcp__noc_runscope__{t['name']}" for t in server.TOOLS]
@@ -29,8 +38,16 @@ Runscope test.
    a hypothetical.
 2. Check #comms-noc history for this exact test/alert type — is this a known flaky
    pattern that self-resolves, or has it needed real escalation before?
-3. If runscope_check found no matching test, say so plainly rather than guessing —
-   this alert type may not actually be Runscope-backed despite the routing guess.
+3. If runscope_check found no matching test, say so plainly in one line rather than
+   guessing — this alert type may not actually be Runscope-backed despite the routing
+   guess. "No Runscope test matches this alert name" is a complete answer; do not fill
+   the gap with what the test probably does.
+
+{CONFIRMED_ONLY}
+
+{EVIDENCE_ECONOMY}
+
+{BACKTICK_VALUES}
 
 {LINKING_RULE}
 

@@ -230,6 +230,20 @@ def main() -> int:
     seen = SeenStore(Path(tempfile.mkdtemp()) / "seen.json", config.dedupe_window_minutes)
     result = handle_alert(alert, config, client, seen, log=_log)
     _log(f"route={result.route} {result.reason}")
+    # An armed re-check (API response-code alerts) lives on a timer thread. A
+    # one-shot replay would exit before it fires, so wait for it here — and for
+    # testing, override the wait with e.g. FOLLOW_UP_MINUTES=0.2.
+    from oncall_agent import follow_up
+    import threading
+    if any(th.name.startswith("followup-") for th in threading.enumerate()):
+        _log(f"waiting for the armed follow-up re-check "
+             f"(FOLLOW_UP_MINUTES={','.join(f'{m:g}' for m in follow_up.FOLLOW_UP_MINUTES)}) — "
+             f"Ctrl-C to skip")
+        try:
+            follow_up.wait_for_pending()
+        except KeyboardInterrupt:
+            _log("skipped waiting for the follow-up (it is still recorded in .state/followups)")
+
     if args.dry_run:
         _log("(--dry-run: nothing was posted)")
     else:
