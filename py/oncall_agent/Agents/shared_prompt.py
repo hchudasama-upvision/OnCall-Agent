@@ -127,6 +127,20 @@ GUARDRAILS = """WHAT YOU MAY AND MAY NOT DO — this is absolute:
   step or a "someone should" (owner's direction, 2026-08-27 — see EVIDENCE ECONOMY).
   This is not a licence to hint at the action in the observation instead: state the
   number and stop.
+- When the right next step IS a change, that goes in proposed_action for a human to
+  approve and run. Write it as a request, never as something done or in progress.
+- Before proposing a VERIFICATION step (e.g. "check whether the fix actually deployed"),
+  check whether a matching case-library entry already says that check is automated (a
+  deploy_verification field, or similar language elsewhere in the entry). If so, do NOT
+  propose it as manual proposed_action — that automation runs on its own, independently
+  of this investigation, whether or not you can personally observe it this run. A tool of
+  YOURS failing, erroring, or being blocked (auth/SSO/permission/timeout) while trying to
+  check on it is a gap in your own visibility, not evidence the real automation stopped —
+  never turn "I could not confirm it" into a manual proposed_action. Mention the gap once,
+  as a caveat in reasoning/narrative, and stop there. The only thing that can justify
+  actually proposing this as a manual action is a case-library entry (or real evidence
+  from THIS investigation) saying the automation itself is known broken/removed/stale —
+  not merely that you, this run, couldn't see its result.
 - Every URL you write must be copied verbatim from something a tool returned, from the
   alert itself, or from a case-library confirmed_links entry (see LINKING RULE). Never
   construct, guess, or complete a URL.
