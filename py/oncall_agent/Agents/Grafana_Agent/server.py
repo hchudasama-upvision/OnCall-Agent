@@ -26,12 +26,14 @@ here can post to Slack.
 """
 import json
 import os
+import re
 import sys
 import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import grafana, grafana_capture
+from ... import chart
+from . import api_health, grafana, grafana_capture, thanos
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "noc-grafana", "version": "0.1.0"}
@@ -190,6 +192,227 @@ def tool_render_panel(dashboard_uid: str, panel_id: int, variables: Optional[dic
             f"Cite \"{key}\" in a post's evidence_keys to attach it.")
 
 
+def tool_api_success_rate(alert_name: str, window: str = "") -> str:
+    """The API success rate for a response-code alert, computed from the
+    dashboard panel's OWN queries.
+
+    This exists because "API Services - Overview" is Elasticsearch-backed:
+    prometheus_query cannot answer it, describe_dashboard shows the query but
+    not the value, and a rendered stat panel is a picture a model should not be
+    reading numbers off. Without this tool the first post carried a graph and
+    the words "its current value is not visible to me" (real output,
+    2026-08-28).
+    """
+    try:
+        pair = api_health.find_panel_pair(alert_name)
+    except Exception as e:                              # noqa: BLE001
+        return f"LOOKUP FAILED — {type(e).__name__}: {str(e).splitlines()[0]}"
+    if not pair:
+        return (f"No panel on 'API Services - Overview' matches {alert_name!r}. Do not guess "
+                f"a rate; say the dashboard does not cover this alert.")
+    lines = [f"dashboard: API Services - Overview [{api_health.DASHBOARD_UID}]",
+             f"response-codes panel: {pair.codes_panel} — {pair.codes_title}",
+             f"success-rate panel:   {pair.rate_panel} — {pair.rate_title}",
+             "RENDER BOTH of those panels and attach both — the stat is the number a human "
+             "looks for first, the timeseries says which codes moved."]
+    if not pair.rate_panel:
+        lines.append("No confident success-rate twin for this environment — report the graph "
+                     "only, and do not quote a neighbouring environment's number.")
+        return "\n".join(lines)
+    try:
+        rate = api_health.success_rate(pair.rate_panel, from_=window or api_health.DEFAULT_WINDOW)
+    except Exception as e:                              # noqa: BLE001
+        lines.append(f"RATE UNAVAILABLE — {type(e).__name__}: {str(e).splitlines()[0]}")
+        return "\n".join(lines)
+    lines += [
+        f"window: {rate.window}",
+        f"success rate: {rate.percent}  (panel formula 1 - 5XX/(2XX+5XX+4XX+NEG), "
+        f"4 decimals as the panel shows it)",
+        "counts: " + ", ".join(f"{band}={count}" for band, count in sorted(rate.counts.items())),
+        f"threshold {api_health.RECOVERY_THRESHOLD * 100:.4f}% -> "
+        f"{'at or above' if rate.recovered else 'BELOW'}",
+        "A re-check is armed automatically 5 and 10 minutes after your post, and the "
+        "recovered/still-below line plus a fresh screenshot is posted by code. Do not "
+        "promise a re-check, and do not ask a human to watch it.",
+    ]
+    return "\n".join(lines)
+
+
+# A monitored endpoint URL can carry a live credential in its query string —
+# the real ops-prom EndpointDown series on 2026-08-31 included
+# "...?authToken=<real token>". These threads get posted to Slack, so the query
+# string is stripped in CODE rather than trusted to the prompt.
+_URL_TOKENISH = re.compile(r"(?i)\b(auth|api|access|session|token|key|secret|password|sig)")
+
+
+def _safe_url(url: str) -> str:
+    """Host + path, with a query string reduced to its parameter NAMES.
+
+    Keeping the names matters — "?authToken=..." vs "?playout" is the
+    difference between two endpoints — while the values never reach Slack.
+    """
+    if "?" not in url:
+        return url
+    base, _, query = url.partition("?")
+    if not query:
+        return f"{base}?"
+    names = []
+    for part in query.split("&"):
+        name = part.split("=", 1)[0]
+        names.append(f"{name}=<redacted>" if _URL_TOKENISH.search(name) else name)
+    return f"{base}?{'&'.join(names)}"
+
+
+def tool_endpoint_status(url_filter: str = "", state: str = "firing", limit: int = 20) -> str:
+    """Which monitored endpoints are down right now, from the alert series itself.
+
+    EndpointDown (env=ops-prom, monitor=OpsProm) carries everything the thread
+    needs on the series' own labels: the `url` probed, the `status` it returned
+    versus `expected_status_code`, `total_time`, and the TLS fields
+    (cert_available / cert_expiry_days / expiry_date / cert_issuer). Reading
+    them here means the thread names the endpoint and the failure mode instead
+    of restating the alert.
+
+    Credentials in a URL's query string are stripped before returning (see
+    _safe_url) — quote the URL exactly as this tool gives it to you.
+    """
+    selector = 'ALERTS{alertname="EndpointDown"'
+    if state in ("firing", "pending"):
+        selector += f', alertstate="{state}"'
+    selector += "}"
+    try:
+        series = grafana.instant_query(_DEFAULT_DS, selector)
+    except Exception as e:                              # noqa: BLE001
+        return f"QUERY FAILED — {type(e).__name__}: {str(e).splitlines()[0]}"
+    if not series:
+        return (f"No EndpointDown series in state {state!r} right now. The probe may have "
+                f"recovered since the alert fired — say that, and check `total_time` history "
+                f"rather than assuming it never happened.")
+
+    rows = []
+    for item in series:
+        labels = item.get("metric", {})
+        url = labels.get("url", "")
+        if url_filter and url_filter.lower() not in url.lower():
+            continue
+        cert = labels.get("cert_expiry_days", "")
+        rows.append({
+            "url": _safe_url(url),
+            "status": labels.get("status", "?"),
+            "expected": labels.get("expected_status_code", "?"),
+            "total_time": labels.get("total_time", "?"),
+            "state": labels.get("alertstate", state),
+            "environment": labels.get("environment", ""),
+            "cert": (f"{cert}d left, issuer {labels.get('cert_issuer', '?')}, expires "
+                     f"{labels.get('expiry_date', '?')}"
+                     if cert not in ("", "N/A") else
+                     f"cert_available={labels.get('cert_available', '?')}"),
+        })
+    if not rows:
+        return (f"No EndpointDown series matches {url_filter!r} (state {state!r}). "
+                f"{len(series)} endpoint(s) are down overall — do not report one you did "
+                f"not match.")
+
+    lines = [f"{len(rows)} endpoint(s) in state {state!r}"
+             + (f" matching {url_filter!r}" if url_filter else "") + ":"]
+    for row in rows[:max(1, min(int(limit), 100))]:
+        lines.append(f"  {row['url']}")
+        lines.append(f"      got {row['status']}, expected {row['expected']}, "
+                     f"probe {row['total_time']}s, state {row['state']}")
+        lines.append(f"      tls: {row['cert']}"
+                     + (f"   monitor group: {row['environment']}" if row["environment"] else ""))
+    if len(rows) > limit:
+        lines.append(f"  ... {len(rows) - limit} more not shown; the count above is the total.")
+    lines.append("URLs above already have credential-bearing query values redacted — quote "
+                 "them exactly as shown, never reconstruct the original.")
+    return "\n".join(lines)
+
+
+def tool_thanos_alert_status(alert_name: str, instance: str = "", hours: int = 6) -> str:
+    """For a PromQL-rule alert ("High concurrent_requests for core-admin-server"):
+    the rule's own threshold, the current value, and HOW LONG it has been on that
+    side of the threshold.
+
+    The alert title is the rule name, so the threshold and the exact selector are
+    looked up in Thanos rather than guessed — and the answer says "high for 2h10m"
+    or "low again, came back below 12m ago" instead of a bare number.
+    """
+    try:
+        rules = thanos.find_alert_rules(alert_name)
+    except thanos.ThanosError as e:
+        return f"THANOS LOOKUP FAILED — {e}"
+    if not rules:
+        return (f"No alerting rule in Thanos matches {alert_name!r}. Without the rule there is "
+                f"no threshold, so do not call a number high or low — say the rule could not "
+                f"be found.")
+    lines = []
+    for rule in rules[:3]:
+        lines.append(f"rule:      {rule.name}   [{rule.group}]")
+        lines.append(f"condition: {rule.query}   (for {rule.for_seconds // 60}m, "
+                     f"currently {rule.state})")
+        try:
+            series, note = thanos.resolve_series(rule.expr, instance=instance)
+        except thanos.ThanosError as e:
+            lines.append(f"  series unavailable: {e}")
+            continue
+        lines.append(f"  scope:   {note}")
+        if series:
+            values = sorted(((float(s["value"][1]), s["metric"].get("instance", "?"),
+                              s["metric"].get("pod", ""))
+                             for s in series), reverse=True)
+            lines.append(f"  pods:    {len(values)} reporting; worst first:")
+            for value, host, pod in values[:6]:
+                lines.append(f"      {value:>8.0f}  {host}" + (f"  {pod}" if pod else ""))
+        try:
+            summary = thanos.breach_summary(rule.expr, rule.threshold, hours=hours)
+            lines.append(f"  now:     {summary.explain()}")
+            lines.append(f"  window:  last {hours}h, {summary.points} datapoint(s), "
+                         f"min {summary.minimum:.0f} / max {summary.maximum:.0f}")
+        except thanos.ThanosError as e:
+            lines.append(f"  history unavailable: {e}")
+        lines.append(f"  graph:   {thanos.graph_url(rule.expr, hours)}")
+    lines.append("The threshold and the `for` duration come from the rule itself. Quote the "
+                 "duration wording as given — it is computed from the series, not estimated.")
+    return "\n".join(lines)
+
+
+def tool_thanos_graph(expr: str, hours: int = 6, key: str = "", threshold: float = 0.0) -> str:
+    """Screenshot the Thanos graph for a PromQL expression and return its evidence key.
+
+    Captures the real Thanos UI (query bar in frame, so the picture carries its
+    own provenance). Falls back to drawing the series locally if the UI will not
+    render, and says which one produced the image.
+    """
+    key = key or "thanos_" + re.sub(r"[^a-z0-9]+", "_", expr.lower())[:48].strip("_")
+    out_path = EVIDENCE_DIR / f"{key}.png"
+    caption = f"Thanos · {expr} · last {hours}h"
+    try:
+        thanos.capture_graph(expr, out_path, hours=hours)
+        _record(key, out_path, caption)
+        return (f"OK — captured {out_path.stat().st_size} bytes from the Thanos UI.\n"
+                f"evidence_key: {key}\ncaption: {caption}\n"
+                f"Cite \"{key}\" in a post's evidence_keys to attach it.")
+    except Exception as ui_error:                       # noqa: BLE001
+        pass
+    try:
+        points = thanos.query_range(f"max({expr})", hours=hours)
+        if not points:
+            return (f"NO GRAPH — the Thanos UI would not render and the expression returns no "
+                    f"datapoints over {hours}h. Report no data; do not describe a graph.")
+        from datetime import datetime, timezone
+        series = [(datetime.fromtimestamp(ts, timezone.utc), value) for ts, value in points]
+        chart.render_series_png(series, f"{expr}", out_path,
+                                subtitle=f"Thanos · last {hours}h · drawn locally",
+                                threshold=threshold or None)
+    except Exception as e:                              # noqa: BLE001
+        return f"CAPTURE FAILED — Thanos UI: {str(ui_error)[:120]}; local fallback: {e}"
+    local_caption = f"{caption} — drawn locally from Thanos data (the Thanos UI did not render)"
+    _record(key, out_path, local_caption)
+    return (f"OK — the Thanos UI did not render, so the series was drawn locally "
+            f"({out_path.stat().st_size} bytes).\nevidence_key: {key}\n"
+            f"caption: {local_caption}\nCite \"{key}\" in a post's evidence_keys.")
+
+
 TOOLS = [
     {"name": "search_dashboards",
      "description": "Find Grafana dashboards by title. Start here: search for the resource "
@@ -216,6 +439,43 @@ TOOLS = [
      "description": "Prometheus/Loki datasource uids available for prometheus_query.",
      "inputSchema": {"type": "object", "properties": {}},
      "handler": tool_list_datasources},
+    {"name": "thanos_alert_status",
+     "description": "For a PromQL-rule alert (e.g. 'High concurrent_requests for "
+                    "core-admin-server'): the rule's own threshold and selector from Thanos, "
+                    "the current per-pod values, and HOW LONG it has been above or below the "
+                    "threshold — 'high for 2h10m' / 'low again, came back below 12m ago'. "
+                    "START HERE for those alerts; the alert title is the rule name.",
+     "inputSchema": {"type": "object", "properties": {
+         "alert_name": {"type": "string"}, "instance": {"type": "string"},
+         "hours": {"type": "integer"}}, "required": ["alert_name"]},
+     "handler": tool_thanos_alert_status},
+    {"name": "thanos_graph",
+     "description": "Screenshot the Thanos UI graph for a PromQL expression (query bar in "
+                    "frame) and return its evidence key. Use the rule's own expression from "
+                    "thanos_alert_status.",
+     "inputSchema": {"type": "object", "properties": {
+         "expr": {"type": "string"}, "hours": {"type": "integer"},
+         "key": {"type": "string"}, "threshold": {"type": "number"}},
+         "required": ["expr"]},
+     "handler": tool_thanos_graph},
+    {"name": "endpoint_status",
+     "description": "For an EndpointDown alert (env=ops-prom / monitor=OpsProm): which "
+                    "endpoints are down right now, what status each returned versus the "
+                    "expected one, probe time, and TLS expiry — read from the alert series' "
+                    "own labels. Credentials in a URL query string are redacted for you.",
+     "inputSchema": {"type": "object", "properties": {
+         "url_filter": {"type": "string"}, "state": {"type": "string"},
+         "limit": {"type": "integer"}}},
+     "handler": tool_endpoint_status},
+    {"name": "api_success_rate",
+     "description": "For a Response Codes / API Success Rate alert: the matching panels on "
+                    "'API Services - Overview' AND the current success rate computed from the "
+                    "panel's own Elasticsearch queries. Use this instead of prometheus_query — "
+                    "that dashboard is not Prometheus-backed. Pass the alert name verbatim.",
+     "inputSchema": {"type": "object", "properties": {
+         "alert_name": {"type": "string"}, "window": {"type": "string"}},
+         "required": ["alert_name"]},
+     "handler": tool_api_success_rate},
     {"name": "render_panel",
      "description": "Render a panel to PNG for attaching to the Slack thread. Pass template "
                     "variables as {\"var-instance\": \"10.60.4.182:9182\"}. Returns an "

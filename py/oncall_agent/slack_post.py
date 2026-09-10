@@ -33,6 +33,16 @@ def compose_top_level_text(incident: VictorOpsIncident) -> str:
     return f"Alert:\n> *{incident_ref}: {incident.incident_name}*"
 
 
+# Owner's direction, 2026-08-27: the thread carries OBSERVATIONS ONLY — no
+# recommendation lines and no "Proposed action" block. Every agent's prompt says
+# to leave proposed_action empty, but a prompt is a request and this is the lock:
+# code decides what gets posted (CLAUDE.md non-negotiable #1), so a model that
+# fills the field anyway still cannot put an action request in the channel.
+# compose_action_request/post_action_request below are deliberately kept — the
+# approve/deny plumbing is the rollback path if the owner wants it back; flipping
+# this one flag is the whole change.
+POST_PROPOSED_ACTION = False
+
 def compose_action_request(action: dict) -> str:
     """The approval ask, worded so nobody can read it as work already done."""
     lines = [":raised_hand: *Proposed action — NOT performed. Needs a human.*",
@@ -123,9 +133,13 @@ def post_decided_thread(
         else:
             client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=post.text)
 
-    if decision.proposed_action:
-        post_action_request(client, channel, thread_ts, decision.proposed_action,
-                            with_buttons=with_buttons, log=log)
+    if decision.proposed_action and (decision.proposed_action.get("summary") or "").strip():
+        if POST_PROPOSED_ACTION:
+            post_action_request(client, channel, thread_ts, decision.proposed_action,
+                                with_buttons=with_buttons, log=log)
+        else:
+            log("proposed_action suppressed (observations-only thread): "
+                f"{str(decision.proposed_action.get('summary'))[:120]}")
 
 
 class DryRunSlackPoster:
@@ -147,7 +161,12 @@ class DryRunSlackPoster:
         for post in decision.posts:
             files = [str(evidence_file_paths[k]) for k in post.evidence_keys if k in evidence_file_paths]
             self.log(f"\n[DRY RUN] would reply:\n{post.text}" + (f"\n  files: {files}" if files else ""))
-        if decision.proposed_action:
-            self.log(f"\n[DRY RUN] would ask for approval:\n"
-                     f"{compose_action_request(decision.proposed_action)}")
+        summary = (decision.proposed_action or {}).get("summary") or ""
+        if summary.strip():
+            if POST_PROPOSED_ACTION:
+                self.log(f"\n[DRY RUN] would ask for approval:\n"
+                         f"{compose_action_request(decision.proposed_action)}")
+            else:
+                self.log(f"\n[DRY RUN] proposed_action suppressed "
+                         f"(observations-only thread): {summary[:120]}")
         self.log(f"\n(owning_team_mention metadata: {decision.owning_team_mention or '(none)'})")

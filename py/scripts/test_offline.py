@@ -23,6 +23,7 @@ What it does NOT cover: anything needing Slack, Grafana, Edge or the model.
 Use `python py/scripts/check_setup.py` for those.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -171,6 +172,15 @@ def test_guardrails() -> None:
         except RuntimeError:
             return False
 
+    # BACKTICK_VALUES tells agents to wrap values in backticks, and a probed
+    # endpoint URL is a value. The trailing backtick used to be read as part of
+    # the URL, so a real EndpointDown run was discarded as a fabricated link.
+    check("a backticked URL is not mistaken for a fabricated one",
+          accepts(decision("endpoint `https://veritone.atlassian.net/browse/VE-23618` is down")),
+          "a URL in backticks must normalize to the same URL")
+    check("a genuinely invented URL is still refused",
+          not accepts(decision("see `https://veritone.atlassian.net/browse/VE-99999`")))
+
     check("url that was actually read is allowed",
           accepts(decision("see https://veritone.atlassian.net/browse/VE-23618")))
     check("trailing punctuation does not break a real url",
@@ -287,6 +297,9 @@ def test_specialist_routing() -> None:
 
     cases = [
         ("Engine failure rate above 15%", "edge_ui"),
+        # Backlog moved from grafana_metrics to edge_ui (owner, 2026-08-31): the
+        # graphs are in Edge UI, not Grafana, and it is the same alert family.
+        ("Engine backlog critical for 30m", "edge_ui"),
         ("Engine failure rate 100% for all engine in every Environment", "edge_ui"),
         ("KubePodsNotReady", "kubernetes"),
         ("KubePodCrashLooping", "kubernetes"),
@@ -295,7 +308,9 @@ def test_specialist_routing() -> None:
         ("Site DNS Valdation", "runscope"),
         ("DiskSpaceUtilizationCritical", "grafana_metrics"),
         ("VM Disk Usage above 90% - Prometheus", "grafana_metrics"),
-        ("AlbUnhealthyHostCritical", "grafana_metrics"),
+        # Moved to the AWS agent 2026-08-31 (owner): the evidence is ELB target
+        # health, not a Grafana panel.
+        ("AlbUnhealthyHostCritical", "aws"),
         ("Some totally unrecognized alert type", None),
     ]
     for alert_name, expected in cases:
@@ -316,6 +331,48 @@ def test_specialist_routing() -> None:
     for other in ("kubernetes", "grafana_metrics", "runscope"):
         check(f"{other!r} specialist has NO GitHub tools (kept edge_ui-only for now)",
               not any(t.startswith("mcp__noc_github__") for t in SPECIALISTS[other]["tools"]))
+    # Owner's direction (2026-08-26): confirmed data only, and keep the thread
+    # short. Both rules live in Agents/shared_prompt.py so no agent can be given a
+    # looser standard than its siblings — including the generalist fallback paths.
+    from oncall_agent import investigate as investigate_prompts
+
+    _every_prompt = ([(name, cfg["system_prompt"]) for name, cfg in SPECIALISTS.items()]
+                     + [("generalist(tools)", investigate_prompts.SYSTEM_PROMPT),
+                        ("generalist(no-tools)", investigate_prompts.CONTEXT_PROMPT)])
+    for name, text in _every_prompt:
+        check(f"{name!r} is told to post confirmed data only, no guesses",
+              "CONFIRMED DATA ONLY" in text)
+        # edge_ui has a validated fixed 7-post structure, so it carries the same
+        # discipline scoped to that structure instead of the generic reply cap.
+        check(f"{name!r} is told to keep the thread short and on point",
+              "KEEP IT SHORT" in text or "These seven ARE the thread" in text)
+        check(f"{name!r} is told not to recommend — observations only",
+              "OBSERVATIONS ONLY" in text or "These seven ARE the thread" in text)
+        # Values in backticks scan far better in Slack; the same block also warns
+        # that backticking an @mention or a link stops Slack rendering it.
+        check(f"{name!r} is told to backtick concrete values",
+              "BACKTICK EVERY VALUE" in text)
+
+    # ...and the lock behind those prompts: code decides what reaches Slack, so a
+    # model that fills proposed_action anyway still cannot post an action request.
+    from oncall_agent import slack_post
+    from oncall_agent.types import Decision, PlannedPost, VictorOpsIncident
+
+    check("proposed_action posting is gated off", slack_post.POST_PROPOSED_ACTION is False)
+    _printed: list = []
+    slack_post.DryRunSlackPoster(log=_printed.append).post_decided_thread(
+        VictorOpsIncident(incident_number=1, organization="o", incident_name="x",
+                          entity_display_name="", monitoring_tool="", state_message="",
+                          escalation_policy="", slack_permalink="", created_at=""),
+        Decision(should_post=True, reasoning="", root_cause_narrative="",
+                 owning_team_mention="",
+                 posts=[PlannedPost(text="observed: x", evidence_keys=[])],
+                 proposed_action={"summary": "restart the thing", "command": "", "risk": ""}),
+        {})
+    _log = "\n".join(_printed)
+    check("a model-emitted proposed_action is suppressed, not posted",
+          "would ask for approval" not in _log and "suppressed" in _log, _log[-200:])
+
     check("every specialist gets the Jira tools too (a related ticket isn't domain-specific)",
           all(any(t.startswith("mcp__noc_jira__") for t in cfg["tools"])
               for cfg in SPECIALISTS.values()))
@@ -409,6 +466,406 @@ def test_formatting() -> None:
           len(CASES.cases) == sum(len(cfg["case_library"].cases)
                                   for cfg in specialists_reg.SPECIALISTS.values()))
 
+    # PandoLogic renders the host INTO the alertname, so the parsed alert name is
+    # "SVC120 DiskSpaceUtilizationWarning". Before the suffix match this returned
+    # no cases at all for the whole family — silently, on a real dry run.
+    grafana_cases = specialists_reg.SPECIALISTS["grafana_metrics"]["case_library"]
+    hosty = grafana_cases.find("SVC120 DiskSpaceUtilizationWarning")
+    # Two names for one case that differ only in letter case must not double it.
+    aws_cases = specialists_reg.SPECIALISTS["aws"]["case_library"]
+    alb = aws_cases.find("ALBUnhealthyHostCritical")
+    check("a case is not returned twice when its names differ only in case",
+          len(alb) == len({id(c) for c in alb}), [c["fingerprint"] for c in alb])
+
+    check("host-prefixed alertname still finds its case (suffix match)",
+          [c["fingerprint"] for c in hosty] == ["DiskSpaceUtilization/pandologic-windows"],
+          [c["fingerprint"] for c in hosty])
+    check("suffix match cannot satisfy Critical with a Warning-only entry",
+          all("Warning" not in c["alertname"] or "Critical" in c["alertname"]
+              for c in grafana_cases.find("ny1wv9601 DiskSpaceUtilizationCritical")),
+          [c["fingerprint"] for c in grafana_cases.find("ny1wv9601 DiskSpaceUtilizationCritical")])
+    check("an unrelated trailing word does not suffix-match a case",
+          grafana_cases.find("SomethingElse Entirely") == [])
+
+    # The graph-answered alert families each carry a verified dashboard block —
+    # that is the knowledge panel_map used to hold as static config.
+    graph_cases = {c["fingerprint"]: c for c in grafana_cases.cases if c.get("dashboard")}
+    check("every graph-alert family has a dashboard block with a uid",
+          {"KubePersistentVolumeFillingUp/*", "DiskSpaceUtilization/pandologic-windows",
+           "VmActiveRedAlarms/pandologic-vmware", "HighMemoryUtilization/windows"}
+          <= set(graph_cases) and all(c["dashboard"].get("uid") for c in graph_cases.values()),
+          sorted(graph_cases))
+    check("the two PVC copies point at each other (they must be edited together)",
+          all(any("_shared_with" in c and "KubePersistentVolumeFillingUp" in c["fingerprint"]
+                  for c in cfg["case_library"].cases)
+              for name, cfg in specialists_reg.SPECIALISTS.items()
+              if name in ("kubernetes", "grafana_metrics")))
+
+
+def test_api_health_pairing() -> None:
+    """Panel pairing for response-code alerts, against the real titles from
+    'API Services - Overview' (read live 2026-08-28). No network: the dashboard
+    payload is stubbed, because what is being tested is the pairing RULE."""
+    from oncall_agent.Agents.Grafana_Agent import api_health
+
+    group("api health panel pairing (stubbed dashboard)")
+
+    titles = {
+        16: "US-Prod Response Codes - haproxy", 12: "Prod - API Success Rate",
+        25: "US-Prod Response Codes - nginx -ai13s", 26: "US-Prod API Success Rate -ai13s",
+        15: "UK-Prod Response Codes - nginx", 14: "UK-Prod API Success Rate",
+        9: "DMH CrUX - API Response Codes", 10: "DMH CrUX - API Success Rate",
+        23: "DMH Core - API Response Codes", 24: "DMH Core - API Success Rate",
+        27: "Azure Prod Response Codes - nginx -ai13s",
+        28: "Azure-prod API Success Rate -ai13s",
+        29: "Azure Stage Response Codes - nginx -ai13s",
+        30: "Azure-stage API Success Rate -ai13s",
+    }
+    stub = {"dashboard": {"panels": [{"id": pid, "title": title} for pid, title in titles.items()],
+                          "templating": {"list": []}}}
+    original = api_health._dashboard
+    api_health._dashboard = lambda: stub
+    try:
+        expected = [
+            ("US-Prod Response Codes - nginx -ai13s   aiWARE/prod", 25, 26),
+            # The bug this rule exists for: haproxy must NOT pair with the
+            # -ai13s stat (26), and must not pair with UK's (14) either.
+            ("US-Prod Response Codes - haproxy", 16, 12),
+            ("UK-Prod Response Codes - nginx", 15, 14),
+            ("Azure Prod Response Codes - nginx -ai13s", 27, 28),
+            ("Azure Stage Response Codes - nginx -ai13s", 29, 30),
+            ("DMH CrUX - API Response Codes", 9, 10),
+            ("DMH Core - API Response Codes", 23, 24),
+        ]
+        for alert, codes, rate in expected:
+            pair = api_health.find_panel_pair(alert)
+            check(f"{alert[:38]!r} -> panels {codes}/{rate}",
+                  pair is not None and pair.codes_panel == codes and pair.rate_panel == rate,
+                  f"got {pair and (pair.codes_panel, pair.rate_panel)}")
+        check("an unrelated alert matches no panel",
+              api_health.find_panel_pair("KubePodsNotReady") is None)
+        check("alert-family detection is narrow",
+              api_health.is_api_health_alert("US-Prod Response Codes - nginx")
+              and api_health.is_api_health_alert("UK-Prod API Success Rate")
+              and not api_health.is_api_health_alert("KubePersistentVolumeFillingUp"))
+    finally:
+        api_health._dashboard = original
+
+    # The formula, applied to the counts the real panel legend showed.
+    rate = api_health.SuccessRate(ratio=1 - 30 / (1072747 + 6555 + 30),
+                                 counts={"2xx": 1072747, "4xx": 6555, "5xx": 30, "neg": 0})
+    check("success rate formats to 4 decimals like the panel",
+          rate.percent == "99.9972%", rate.percent)
+    check("99.9972% counts as recovered against the 99.99% threshold", rate.recovered)
+    check("99.98% does not",
+          not api_health.SuccessRate(ratio=0.9998, counts={"2xx": 1}).recovered)
+
+
+def test_follow_up() -> None:
+    """The timed re-check: eligibility, the posted wording, and the persistence
+    that lets a restart resume it."""
+    import time as _time
+
+    from oncall_agent import follow_up
+    from oncall_agent.Agents.Grafana_Agent import api_health
+    from oncall_agent.types import ParsedAlert
+
+    group("follow-up re-check")
+
+    def alert(name: str) -> ParsedAlert:
+        return ParsedAlert(source="victorops", kind="incident", raw_text=name,
+                           alert_name=name, incident_name=name)
+
+    # applies() needs Grafana configured; test the family predicate directly so
+    # the result does not depend on this machine's .env.
+    check("response-code alerts are the follow-up family",
+          api_health.is_api_health_alert(alert("US-Prod Response Codes - nginx").alert_name))
+    check("pod alerts are not",
+          not api_health.is_api_health_alert(alert("KubePodCrashLooping").alert_name))
+
+    check_obj = follow_up.PendingCheck(
+        incident_number="119881", alert_name="US-Prod Response Codes - nginx -ai13s",
+        thread_ts="1788168357.875587", channel="C0TEST", codes_panel=25, rate_panel=26,
+        environment="US-Prod Response Codes - nginx -ai13s",
+        created_at=_time.time(), due_at=_time.time() + 300, attempt=1, attempts_total=2)
+    message = follow_up.compose_message(
+        check_obj,
+        api_health.SuccessRate(ratio=0.999972, counts={"2xx": 1072747, "5xx": 30},
+                               window="now-15m -> now", panel=26))
+    check("follow-up message is a field block with single-asterisk labels",
+          message.startswith("*Re-check") and "*Success rate:* `99.9972%`" in message
+          and "**" not in message, message)
+    check("follow-up message says recovered above the threshold",
+          "recovered" in message and "99.9900%" in message, message)
+    below = follow_up.compose_message(
+        check_obj, api_health.SuccessRate(ratio=0.9990, counts={"2xx": 1000, "5xx": 1},
+                                          window="now-15m -> now", panel=26))
+    check("a rate under the threshold reads as still below",
+          "still below" in below and "recovered" not in below, below)
+    check("follow-up posts no recommendation and no proposed action",
+          not any(word in message.lower() for word in ("recommend", "should", "suggest")))
+
+    # Persistence round trip, and the stale-record drop.
+    import tempfile
+    from types import SimpleNamespace
+    with tempfile.TemporaryDirectory() as tmp:
+        config = SimpleNamespace(state_dir=Path(tmp), evidence_dir=Path(tmp) / "ev",
+                                 comms_channel="C0TEST", is_live=False)
+        path = follow_up._persist(config, check_obj)
+        check("a pending re-check is persisted", path.exists())
+        logged: list = []
+        resumed = follow_up.resume_pending(config, None, log=logged.append)
+        check("a fresh record resumes", len(resumed) == 1, logged)
+        stale = follow_up.PendingCheck(**{**follow_up.asdict(check_obj),
+                                          "created_at": _time.time() - 9999 * 60})
+        follow_up._persist(config, stale)
+        follow_up._forget(config, check_obj)
+        logged.clear()
+        check("a stale record is dropped rather than posted late",
+              follow_up.resume_pending(config, None, log=logged.append) == [],
+              logged)
+
+
+def test_winrm_guards() -> None:
+    """The one remote-EXECUTION surface in the repo. It must be impossible to
+    run anything that is not one of its own fixed read-only queries."""
+    from oncall_agent.Agents.Windows_Agent import winrm_client, windows_processes
+
+    group("winrm guards (no host contacted)")
+
+    for bad in ("Stop-Process -Name w3wp", "Restart-Computer", "hostname",
+                "top_cpu; Remove-Item C:\\", "", "Get-Process"):
+        raised = False
+        try:
+            winrm_client.run_query("somehost", bad)
+        except winrm_client.WinRmError as e:
+            raised = "fixed read-only queries" in str(e) or "not a valid" in str(e)
+        except Exception:                               # noqa: BLE001
+            raised = False
+        check(f"refuses query {bad[:26]!r}", raised)
+    check("the query list is read-only shaped",
+          set(winrm_client.available_queries()) ==
+          {"top_cpu", "top_memory", "memory_totals", "disk_usage", "cpu_now", "uptime"},
+          winrm_client.available_queries())
+    for bad_host in ("-x", "host;whoami", "", "a" * 300):
+        raised = False
+        try:
+            winrm_client.run_query(bad_host, "top_cpu")
+        except winrm_client.WinRmError as e:
+            raised = "not a valid hostname" in str(e) or "not set in .env" in str(e)
+        check(f"refuses host {bad_host[:18]!r}", raised)
+
+    # The idle process must never be reported as a top consumer.
+    check("Idle and _Total are excluded from top lists",
+          {"idle", "_total"} <= windows_processes._NOT_A_PROCESS)
+
+    # And the credential must never appear in tool output.
+    import os
+    os.environ.setdefault("WINDOWS_PASSWORD", "unit-test-secret")
+    answer = ""
+    try:
+        winrm_client.run_query("does-not-resolve.invalid", "top_cpu")
+    except winrm_client.WinRmError as e:
+        answer = str(e)
+    check("a WinRM error never contains the password",
+          os.environ["WINDOWS_PASSWORD"] not in answer, answer[:120])
+
+
+def test_aws_guards() -> None:
+    """The read-only AWS surface: allow-listed subcommands, validated names, and
+    an RDS follow-up that refuses to guess which database."""
+    from oncall_agent.Agents.AWS_Agent import aws_client
+
+    group("aws guards (no AWS calls)")
+
+    for service, sub in (("rds", "reboot-db-instance"), ("rds", "modify-db-instance"),
+                         ("rds", "delete-db-instance"), ("ec2", "terminate-instances"),
+                         ("iam", "list-users"), ("s3", "rm")):
+        raised = False
+        try:
+            aws_client.run(service, sub, profile="main")
+        except aws_client.AwsError as e:
+            raised = "read-only allow-list" in str(e)
+        except Exception:                               # noqa: BLE001
+            raised = False
+        check(f"refuses `aws {service} {sub}`", raised)
+
+    for bad in ("--profile=other", "-x", "", "a" * 300):
+        raised = False
+        try:
+            aws_client._validate("db instance", bad)
+        except aws_client.AwsError:
+            raised = True
+        check(f"rejects identifier {bad[:18]!r}", raised)
+    check("accepts a real instance identifier",
+          aws_client._validate("db instance", "stage-core-rds2") == "stage-core-rds2")
+
+    from oncall_agent import follow_up
+    from oncall_agent.types import ParsedAlert
+
+    def alert(name: str) -> ParsedAlert:
+        return ParsedAlert(source="victorops", kind="incident", raw_text=name,
+                           alert_name=name, incident_name=name)
+
+    check("an ALB alert gets the alb_health re-check on a 3/6-minute cadence",
+          follow_up.kind_for(alert("uk-1 : uk-prod - ALBUnhealthyHostCritical")) == "alb_health"
+          and follow_up.minutes_for("alb_health") == [3.0, 6.0])
+    check("other families keep the 5/10 cadence",
+          follow_up.minutes_for("thanos_usage") == [5.0, 10.0])
+    check("the load balancer is read from the summary's ARN tail",
+          follow_up._ALB_IN_TEXT.findall(
+              "Application Load Balancer app/uk-prod-fastcore-app-http/992c86a8ba9f5fb3 has")
+          == ["app/uk-prod-fastcore-app-http/992c86a8ba9f5fb3"])
+
+    check("a CloudWatch-alarm alert gets the repeated cloudwatch_usage re-check",
+          follow_up.kind_for(alert("Rekognition-ThrottledCount-High-wpsc01"))
+          == "cloudwatch_usage")
+    check("an RDS alert gets the rds_usage re-check",
+          follow_up.kind_for(alert("[FIRING:1] us-1 : prod - RDS_CPUUtilizationAvgCriticalCore"))
+          == "rds_usage")
+    check("a pod alert gets no re-check",
+          follow_up.kind_for(alert("KubePodCrashLooping")) == "")
+
+    # The resolver must never pick a database when the alert is ambiguous.
+    logged: list = []
+    original = follow_up.aws_client.list_db_instances
+    follow_up.aws_client.list_db_instances = lambda: [
+        {"DBInstanceIdentifier": "prod-core-rds"},
+        {"DBInstanceIdentifier": "prod-media-rds"},
+        {"DBInstanceIdentifier": "stage-core-rds2"},
+    ]
+    try:
+        exact = follow_up._rds_instance_for(
+            alert("RDS CPU high on stage-core-rds2"), logged.append)
+        check("an instance named in the alert is used verbatim",
+              exact == "stage-core-rds2", exact)
+        role = follow_up._rds_instance_for(
+            alert("[FIRING:1] us-1 : prod - RDS_CPUUtilizationAvgCriticalCore"), logged.append)
+        check("prod + core resolves to the prod core database", role == "prod-core-rds", role)
+        logged.clear()
+        vague = follow_up._rds_instance_for(alert("RDS_CPUUtilizationAvgCriticalCore"),
+                                           logged.append)
+        check("an alert naming no database resolves to nothing, not a guess",
+              vague == "", f"{vague!r} {logged}")
+    finally:
+        follow_up.aws_client.list_db_instances = original
+
+
+def test_promql_scoping() -> None:
+    """A cluster-wide rule expression must be scoped to the resource the alert
+    named before the re-check quotes a number from it."""
+    from oncall_agent import follow_up
+
+    group("promql scoping for re-checks")
+
+    expr = ('(vmware_host_cpu_usage{cluster_name=~"RealMatch-Cluster01|RealMatch-Cluster03"} '
+            '/ vmware_host_cpu_max) * 100')
+    scoped = follow_up._scoped_expr(expr, 'host_name="ny1esx9679.verimatch.com"')
+    check("both halves of the expression get the host",
+          scoped.count('host_name="ny1esx9679.verimatch.com"') == 2, scoped)
+    check("the rule's own selector is preserved",
+          'cluster_name=~"RealMatch-Cluster01|RealMatch-Cluster03"' in scoped, scoped)
+    check("function names never gain a selector",
+          follow_up._scoped_expr("sum(rate(x_metric_total[5m])) > 1", 'a="b"')
+          == 'sum(rate(x_metric_total{a="b"}[5m])) > 1',
+          follow_up._scoped_expr("sum(rate(x_metric_total[5m])) > 1", 'a="b"'))
+    check("no scope leaves the expression untouched",
+          follow_up._scoped_expr(expr, "") == expr)
+    check("panel variable maps to the series label",
+          follow_up._scope_selector({"variables": '{"var-esxhost": "ny1esx9679.verimatch.com"}'})
+          == 'host_name="ny1esx9679.verimatch.com"')
+    check("an unknown variable yields no scope, not a guessed label",
+          follow_up._scope_selector({"variables": '{"var-mystery": "x"}'}) == "")
+
+
+def test_mention_escaping() -> None:
+    """An HTML-escaped Slack mention posts as literal text and silently drops the
+    ping. Seen for real on a 2026-08-27 Kubernetes run, where it also threw the
+    whole investigation away on the mention-must-appear-in-a-post guardrail."""
+    from oncall_agent.investigate import _unescape_slack_delimiters, _validate
+    from oncall_agent.types import ParsedAlert
+
+    group("slack mention/link escaping")
+
+    check("escaped mention is repaired",
+          _unescape_slack_delimiters("&lt;@devops-oncall&gt; FYI") == "<@devops-oncall> FYI")
+    check("escaped link is repaired",
+          _unescape_slack_delimiters("see &lt;https://x.test/a|the run&gt;")
+          == "see <https://x.test/a|the run>")
+    check("ordinary text with a stray entity is left alone",
+          _unescape_slack_delimiters("free space &lt; 1GB") == "free space &lt; 1GB")
+    check("real mention is untouched",
+          _unescape_slack_delimiters("<@U123> FYI") == "<@U123> FYI")
+
+    alert = ParsedAlert(source="victorops", kind="incident", raw_text="x")
+    payload = {"should_post": True, "reasoning": "", "prior_incidents": [],
+               "root_cause_narrative": "", "owning_team_mention": "&lt;@devops-oncall&gt;",
+               "posts": [{"text": "*Pod:* `x` down", "evidence_keys": []},
+                         {"text": "&lt;@devops-oncall&gt; FYI", "evidence_keys": []}]}
+    decision, _ = _validate(payload, alert, "", evidence_keys=[])
+    check("an escaped mention no longer aborts the run",
+          decision.posts[-1].text == "<@devops-oncall> FYI", decision.posts[-1].text)
+
+    payload["posts"] = [{"text": "*Pod:* `x` down", "evidence_keys": []}]
+    raised = False
+    try:
+        _validate(payload, alert, "", evidence_keys=[])
+    except RuntimeError:
+        raised = True
+    check("a mention in NO post is still a hard error", raised)
+
+
+def test_kubectl_guards() -> None:
+    """The read-only kubectl surface: names can never become flags, verbs are
+    fixed, prod is opt-in, and secrets never leave in log output."""
+    from oncall_agent.Agents.K8S_Agent import kubectl_client as kube
+
+    group("kubectl guards (no cluster needed)")
+
+    for bad in ("--as=cluster-admin", "-n kube-system", "pod;rm -rf /", "Pod_UPPER",
+                "", "x" * 300, "../etc/passwd"):
+        raised = False
+        try:
+            kube._validate("pod", bad)
+        except kube.KubectlError:
+            raised = True
+        check(f"rejects pod name {bad[:24]!r}", raised)
+    check("accepts a real pod name",
+          kube._validate("pod", "discovery-app-stg198-5cf8bdc484-4l4mz").endswith("4l4mz"))
+
+    check("only workload kinds are readable",
+          all(_refuses_kind(kube, k) for k in ("secret", "configmap", "node", "clusterrole")),
+          "a secret must never be readable through this surface")
+
+    check("prod is not in the default environment allow-list",
+          kube.ALLOWED_ENVIRONMENTS == ["stage"] or "KUBE_ENVIRONMENTS" in os.environ,
+          f"got {kube.ALLOWED_ENVIRONMENTS}")
+
+    scrubbed = kube._scrub(
+        "Authorization: Bearer abcdefghij1234567890\n"
+        "password=hunter2000\n"
+        "AKIAIOSFODNN7EXAMPLE\n"
+        "token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w\n"
+        "plain log line about a pod")
+    for secret in ("abcdefghij1234567890", "hunter2000", "AKIAIOSFODNN7EXAMPLE"):
+        check(f"log scrubber removes {secret[:12]!r}", secret not in scrubbed, scrubbed)
+    check("log scrubber keeps ordinary log text",
+          "plain log line about a pod" in scrubbed)
+
+
+def _refuses_kind(kube, kind: str) -> bool:
+    """workload() must refuse anything that is not a workload — a Secret read
+    through the same code path would put credentials in a Slack thread."""
+    from oncall_agent.Agents.K8S_Agent.kubectl_client import Cluster
+    fake = Cluster(name="x", environment="stage", kubeconfig=Path("/nonexistent"))
+    try:
+        kube.workload(fake, kind, "default", "anything")
+    except kube.KubectlError as e:
+        return "not a workload kind" in str(e)
+    except Exception:                                   # noqa: BLE001
+        return False
+    return False
+
 
 # ---------------------------------------------------------------------- mcp
 
@@ -441,23 +898,40 @@ def test_mcp_server() -> None:
     check("notification produced no response", None not in responses,
           "a reply to a notification breaks the protocol")
     tools = [t["name"] for t in responses.get(2, {}).get("result", {}).get("tools", [])]
-    check("four read-only tools listed",
-          sorted(tools) == ["list_channels", "read_channel", "read_thread", "search_messages"],
+    check("the five read-only tools are listed",
+          sorted(tools) == ["list_channels", "read_channel", "read_thread",
+                            "search_messages", "search_recent_changes"],
           f"got {tools}")
+    from oncall_agent import slack_mcp_server as _slack_server
+
+    unconfigured = _slack_server.CHANGE_CHANNELS
+    _slack_server.CHANGE_CHANNELS = []
+    try:
+        answer = _slack_server.tool_search_recent_changes("jenkins.veritone.com")
+    finally:
+        _slack_server.CHANGE_CHANNELS = unconfigured
+    check("an unconfigured change search reports itself unavailable",
+          "not configured" in answer and "unavailable" in answer
+          and "Do not conclude anything about planned work" in answer,
+          answer[:160])
+
     check("no write tool is exposed",
           not any(w in t for t in tools for w in ("post", "send", "write", "update", "delete")),
           "reads and writes must stay on separate credentials")
     check("tools/call returns content",
           "C909ZH4ET" in json.dumps(responses.get(3, {}).get("result", {})))
 
-    group("edge ui / runscope / github / jira mcp servers (protocol only, no live calls)")
+    group("k8s / aws / edge ui / runscope / github / jira mcp servers (protocol only)")
     listing_only = "\n".join([
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                     "params": {"protocolVersion": "2024-11-05", "capabilities": {}}}),
         json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
     ]) + "\n"
     for module_name, expected_min_tools in (
-        ("oncall_agent.Agents.Edgeui_Agent.server", 9),
+        ("oncall_agent.Agents.K8S_Agent.server", 5),
+        ("oncall_agent.Agents.AWS_Agent.server", 11),
+        ("oncall_agent.Agents.Windows_Agent.server", 2),
+        ("oncall_agent.Agents.Edgeui_Agent.server", 11),
         ("oncall_agent.Agents.Runscope_Agent.server", 1),
         ("oncall_agent.Agents.Github_Agent.server", 5),
         ("oncall_agent.Agents.Jira_Agent.server", 3),
@@ -487,7 +961,10 @@ def test_mcp_server() -> None:
 def main() -> int:
     print("oncall-agent offline tests (no credentials, no network)")
     for suite in (test_parser, test_guardrails, test_routing, test_specialist_routing,
-                 test_formatting, test_mcp_server):
+                 test_formatting, test_api_health_pairing, test_follow_up,
+                 test_promql_scoping, test_mention_escaping, test_kubectl_guards,
+                 test_aws_guards,
+                 test_mcp_server):
         try:
             suite()
         except Exception as e:                      # noqa: BLE001 — report, keep going

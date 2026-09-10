@@ -141,6 +141,8 @@ def check_investigation(config) -> None:
     for module_name, label in (
         ("oncall_agent.slack_mcp_server", "slack mcp server"),
         ("oncall_agent.Agents.Grafana_Agent.server", "grafana mcp server"),
+        ("oncall_agent.Agents.K8S_Agent.server", "k8s mcp server"),
+        ("oncall_agent.Agents.AWS_Agent.server", "aws mcp server"),
         ("oncall_agent.Agents.Edgeui_Agent.server", "edge ui mcp server"),
         ("oncall_agent.Agents.Runscope_Agent.server", "runscope mcp server"),
         ("oncall_agent.Agents.Github_Agent.server", "github mcp server"),
@@ -238,6 +240,75 @@ def check_cases() -> None:
                                             f"{name!r} — that specialist loses its historical grounding")
     if not total:
         report("warn", "case library", "no specialist has any cases — triage loses its historical grounding")
+
+
+def check_kubernetes() -> None:
+    """Which clusters the Kubernetes specialist can actually reach.
+
+    A missing kubeconfig is a WARN, not a FAIL: the specialist still works off
+    Prometheus, it just loses pod state and logs — which is exactly what the
+    thread is supposed to carry, so it is worth seeing in preflight rather than
+    discovering mid-incident.
+    """
+    import shutil
+
+    from oncall_agent.Agents.K8S_Agent import kubectl_client as kube
+
+    if not shutil.which("kubectl"):
+        report("warn", "kubectl", "not installed — the Kubernetes specialist loses pod "
+                                  "state/logs and falls back to Prometheus only")
+        return
+    clusters = kube.discover_clusters()
+    if not clusters:
+        report("warn", "kube clusters", f"no kubeconfigs under {kube.KUBECONFIG_DIR} for "
+                                        f"environment(s) {', '.join(kube.ALLOWED_ENVIRONMENTS)} "
+                                        f"— generate one with ~/eks/generate-kube-config.sh, or "
+                                        f"widen KUBE_ENVIRONMENTS")
+        return
+    report("pass", "kube clusters", f"{len(clusters)} reachable config(s) "
+                                   f"[{', '.join(kube.ALLOWED_ENVIRONMENTS)}]: "
+                                   + ", ".join(c.name for c in clusters))
+    # One real call, against the first cluster: a kubeconfig that exists proves
+    # nothing about an AWS session that may have expired hours ago.
+    probe = clusters[0]
+    try:
+        kube.run(probe, ["get", "namespaces", "-o", "name"], timeout=25)
+        report("pass", "kube api", f"{probe.name} answers (aws_profile="
+                                   f"{probe.aws_profile or '?'})")
+    except kube.KubectlError as e:
+        report("warn", "kube api", f"{probe.name} unreachable — {str(e)[:180]}")
+
+
+def check_aws() -> None:
+    """Which AWS accounts the AWS specialist can read right now.
+
+    A WARN, not a FAIL: without it RDS alerts lose their graphs and top-SQL but
+    nothing else breaks. Worth seeing in preflight because the SSO session
+    expires several times a day, and an expired session mid-incident looks like
+    a permissions problem.
+    """
+    import shutil
+
+    from oncall_agent.Agents.AWS_Agent import aws_client
+
+    if not shutil.which("aws"):
+        report("warn", "aws cli", "not installed — RDS alerts lose CloudWatch graphs, "
+                                  "metrics and Performance Insights")
+        return
+    profiles = aws_client.profiles()
+    reachable, expired = [], []
+    for profile in profiles:
+        try:
+            account = aws_client.whoami(profile)
+            reachable.append(f"{profile}={account.account_id}")
+        except aws_client.AwsError as e:
+            expired.append(f"{profile} ({'session expired' if 'expired' in str(e).lower() else str(e)[:60]})")
+    if reachable:
+        report("pass", "aws accounts", f"{', '.join(reachable)} in "
+                                       f"{', '.join(aws_client.regions())}")
+    if expired:
+        report("warn", "aws accounts", f"unreachable: {', '.join(expired)} — run "
+                                       f"`aws sso login --profile <name>`")
 
 
 def check_edge() -> None:
@@ -338,6 +409,8 @@ def main() -> int:
     check_grafana()
     check_panel_map()
     check_cases()
+    check_kubernetes()
+    check_aws()
     check_edge()
     check_github()
     check_jira()

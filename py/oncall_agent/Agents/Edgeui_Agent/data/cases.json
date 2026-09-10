@@ -172,5 +172,45 @@
       "kubectl logs <pod> -n aiware --previous | grep -iE 'panic|fatal|context deadline|OOM|connection refused'"
     ],
     "_note": "Built 2026-08-26 from a live investigation of 9 real #comms-noc threads (session cost ~$1.32). 'verified' = true means a second, independent read of the source thread confirmed the specific numeric/ticket claims verbatim; false means only the single research pass read it \u2014 treat those as high-confidence but not independently double-checked. Do not add an entry here without a real source_permalink read from an actual tool call."
+  },
+  {
+    "fingerprint": "EngineBacklogCritical/*",
+    "alertname": "Engine backlog critical for 30m",
+    "alert_pattern": "[FIRING:1] <cluster> : Engine backlog critical for 30m",
+    "environment": "any aiWARE edge cluster",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": 90,
+    "diagnosis_steps": [
+      "fetch_engine_backlog(environment=<the alert's env>) FIRST \u2014 per-engine now/peak/trend, sorted worst-first, plus the environment total. The alert says a cluster, not an engine.",
+      "Name the engines that actually have backlog and say which are CLIMBING versus draining or flat. Observed on aiw-prod1001 (2026-08-31): 31 of 36 engines had some backlog, total 1844 tasks, Podcast Adapter flat at 866 while SI2 Playback segment creator was climbing at 197.",
+      "capture_backlog_screenshot for the card, so the thread carries the same picture the on-call engineer would open.",
+      "For the engines with real backlog, check whether the tasks are QUEUED or FAILING: list_tasks_by_status(status='failed') on that engine. A backlog of failing tasks will not drain by waiting, and an 'Engine failure rate above 15%' alert on the same cluster is the tell \u2014 resolve that first.",
+      "Check pod health for the engine (the Kubernetes specialist's territory, but the alert often arrives alongside KubePodsNotReady on the same cluster).",
+      "Identify the submitting org for a bad-job flood, from the task records."
+    ],
+    "resolution_steps": [
+      "Workload-explained (load test, bulk run): document the cause link, monitor drain, resolved",
+      "Bad input jobs (404 assets): confirm the asset URL actually 404s (HEAD request), then escalate to identify the submitter; engines are innocent",
+      "Provider throttling: backlog drains as retries succeed; flag quota increase to the cloud account owner",
+      "Engine-code failures: escalate to engine team (they may need to deploy newer builds); NOC cannot fix engine internals",
+      "'All pods running + backlog draining' cases: just monitor to completion"
+    ],
+    "gotchas": [
+      "Backlog alerts often accompany KubePodsNotReady on the same cluster - resolve pods first, backlog usually follows",
+      "A huge backlog of FAILING tasks (not slow ones) will not drain by waiting - an 'Engine failure rate above 15%' alert alongside means tasks are dying, not queued",
+      "Engineers outside NOC may only be able to diagnose, not fix (build deployments owned by another team) - set expectations in thread"
+    ],
+    "escalation": "Engine team for engine-internal failures; SRE for cluster-level causes; app owner for bad submissions",
+    "example_commands": [
+      "curl -I <asset-url> (verify 404 on bad-job inputs)"
+    ],
+    "_owner_direction": "2026-08-31: this belongs with the engine alerts (same family as 'Engine failure rate above 15%'), NOT with the Grafana metrics alerts. The graphs are in Edge UI \u2014 the Backlog card on https://processing.<env>.aiware.run/processing/jobs/ \u2014 so parse it from there.",
+    "edge_ui": {
+      "_verified": "network-sniffed and called live against aiw-prd5001/aiw-prod1001/aiw-uk1001 on 2026-08-31",
+      "page": "https://processing.<env>.aiware.run/processing/jobs/ \u2014 the card titled 'Backlog'",
+      "api": "GET /edge/v1/proc/jobs/backlog_count_by_engine?startTime=<epoch>&endTime=<epoch> -> {counts: [{engineID, engineName, priority, values: [[epoch_ms, count], ...]}]}. This is the endpoint the card itself draws from.",
+      "tools": "fetch_engine_backlog for the numbers (now/peak/trend/priority per engine), capture_backlog_screenshot for the card itself.",
+      "gotcha": "DO NOT try to scrape the card. It is an ApexCharts SVG whose only readable text is the engine-name legend \u2014 a DOM scrape returns a list of engine names and no numbers at all. The card is selected by its `.ant-card-head-title` text, never by its CSS-module class (`TimeSeriesChart_cardChart__9AQva` is build-hashed and changes on every Edge UI deploy)."
+    }
   }
 ]

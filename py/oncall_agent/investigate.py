@@ -44,6 +44,7 @@ SLACK_TOOLS = [
     "mcp__noc_slack__read_thread",
     "mcp__noc_slack__search_messages",
     "mcp__noc_slack__list_channels",
+    "mcp__noc_slack__search_recent_changes",
 ]
 
 # Evidence gathering is a LIVE investigation, not a lookup table. The model
@@ -56,6 +57,9 @@ GRAFANA_TOOLS = [
     "mcp__noc_grafana__describe_dashboard",
     "mcp__noc_grafana__prometheus_query",
     "mcp__noc_grafana__list_datasources",
+    "mcp__noc_grafana__api_success_rate",
+    "mcp__noc_grafana__thanos_alert_status",
+    "mcp__noc_grafana__thanos_graph",
     "mcp__noc_grafana__render_panel",
 ]
 
@@ -120,9 +124,11 @@ def _schema(evidence_keys: List[str]) -> dict:
             },
             "proposed_action": {
                 "type": "object",
-                "description": "A state-CHANGING step you believe is needed. You must NEVER "
-                               "perform one — this is a request for a human. Leave summary "
-                               "empty if the right next step is read-only or unclear.",
+                "description": "LEAVE summary EMPTY. The thread is observations only "
+                               "(owner's direction, 2026-08-27): the on-call engineer reads "
+                               "the numbers and decides. Kept in the schema because the "
+                               "approve/deny plumbing still exists and slack_post gates it "
+                               "off; it is not a field for you to fill.",
                 "properties": {
                     "summary": {"type": "string",
                                 "description": "One line: what should be done and to what. "
@@ -159,6 +165,15 @@ def _schema(evidence_keys: List[str]) -> dict:
     }
 
 
+# The same two rules every specialist gets (Agents/shared_prompt.py), so the
+# generalist fallback and the no-tools path cannot drift into a looser standard
+# than the routed agents. shared_prompt imports nothing, so this is cycle-free.
+from .Agents.shared_prompt import (  # noqa: E402
+    BACKTICK_VALUES,
+    CONFIRMED_ONLY,
+    EVIDENCE_ECONOMY,
+)
+
 _HOUSE_STYLE = """HOUSE STYLE — match it, this is not a report:
 Real #comms-noc threads are short, factual, incremental. Actual examples:
     "100% CPU utilization on VM"
@@ -171,9 +186,9 @@ One observation per reply. Slack mrkdwn. No headings, no bullet-point essays, no
 preamble, no reassurance. If you would write a paragraph, you are writing the
 wrong thing.
 
-State clearly which lines are things you OBSERVED versus what you are
-RECOMMENDING a human check. You have not run any command and have not changed
-anything — never write as though you did.
+Every line is something you OBSERVED — there is no recommendation half to the
+thread (see OBSERVATIONS ONLY below). You have not run any command and have not
+changed anything — never write as though you did.
 
 The last reply carries the escalation @mention, when there is one to make.
 
@@ -183,9 +198,8 @@ WHAT YOU MAY AND MAY NOT DO — this is absolute:
 - You may NOT change anything, and you have no tool that could. No restarting
   pods, no deleting anything, no resizing, no scaling, no config edits, no
   running commands on a host. Not even something small and obviously safe.
-- When the right next step IS a change, that goes in proposed_action for a
-  human to approve and run. Write it as a request, never as something done or
-  in progress: "recommend restarting X" — never "restarting X".
+- You do not recommend either. Report the numbers; the on-call engineer decides
+  what to do about them. proposed_action's summary stays empty.
 - Never write a reply that implies you acted. A NOC engineer reading the thread
   must never be misled about whether the cluster has already been touched.
 
@@ -198,7 +212,13 @@ HARD RULES:
   the alert or in a tool result. Say what you do not know.
 - If past threads show this alert type is knowingly ignored (chronic staging
   noise, a pending deploy, auto-resolves with no action possible), say so and set
-  should_post accordingly — a thread that adds nothing is worse than silence."""
+  should_post accordingly — a thread that adds nothing is worse than silence.
+
+""" + CONFIRMED_ONLY + """
+
+""" + EVIDENCE_ECONOMY + """
+
+""" + BACKTICK_VALUES
 
 
 _ROLE = ("You are the NOC on-call agent for Veritone. A VictorOps incident has just "
@@ -237,8 +257,8 @@ the graph IS the answer. Go and get it:
    (wrong variable? metric absent for this host?) and try again, or say plainly
    that no graph was available.
 
-Render at most two panels. Prefer the one that shows the alerting resource
-over a fleet-wide view.
+Render ONE panel — the one showing the alerting resource, not a fleet-wide view.
+A second only if it answers something the first cannot; never more than two.
 
 Then draft the thread.
 
@@ -324,10 +344,12 @@ def build_prompt(alert: ParsedAlert, evidence_keys: List[str],
                 "  1. one line naming what is high/full and where — the resource, the "
                 "host/volume/VM, and the environment. Use only values present in the "
                 "alert; you have no metric readings, so do not state a percentage.\n"
-                "  2. the panels attached, with at most one short line of context.\n"
+                "  2. the panel attached, with at most one short line of context. One "
+                "panel, not a gallery.\n"
                 "Add a third reply ONLY to @mention an escalation. No diagnosis "
-                "walkthrough, no numbered steps, no hypotheses — a human reads the "
-                "graph faster than your description of it."
+                "walkthrough, no numbered steps, no hypotheses, and no reply about what "
+                "you could not check — a human reads the graph faster than your "
+                "description of it."
             )
     else:
         evidence_block = (
@@ -579,8 +601,17 @@ def _extract_stream(stdout: str) -> tuple:
 
 
 def _normalize_url(url: str) -> str:
-    """Trim the punctuation prose leaves on a URL, and a trailing slash."""
-    return url.rstrip(".,;:!?)]}>|\"'").rstrip("/")
+    """Trim the punctuation prose leaves on a URL, and a trailing slash.
+
+    The backtick matters as much as the full stop: BACKTICK_VALUES tells every
+    agent to wrap concrete values in backticks, and a probed endpoint URL IS a
+    value, so `https://jenkins.veritone.com` is the normal way for it to be
+    written. Without stripping it the trailing backtick became part of the URL,
+    the exact-match check failed, and a complete EndpointDown investigation was
+    thrown away as a fabricated link (real failure, 2026-08-31). Asterisk and
+    underscore go too — Slack's other mrkdwn wrappers.
+    """
+    return url.strip("`*_").rstrip(".,;:!?)]}>|\"'`*_").rstrip("/")
 
 
 def _allowed_urls(alert: ParsedAlert, corpus: str, past_cases: Optional[List[dict]] = None,
@@ -607,6 +638,20 @@ def _allowed_urls(alert: ParsedAlert, corpus: str, past_cases: Optional[List[dic
     return {_normalize_url(u) for u in allowed}
 
 
+# A Slack mention/link only works as `<@U123>` / `<url|text>`. Models sometimes
+# emit the HTML-escaped form (`&lt;@devops-oncall&gt;`) — seen for real on a
+# 2026-08-27 Kubernetes run — and Slack renders that as literal text, silently
+# dropping the ping. This is a RENDERING repair, deliberately narrow: it only
+# rewrites entity sequences that form a mention/link delimiter, and it never
+# touches a URL, an evidence key or any other claim (those still abort loudly
+# per CLAUDE.md non-negotiable #2).
+_ESCAPED_DELIMITER = re.compile(r"&lt;((?:@|#|!|https?:)[^&]{1,200}?)&gt;")
+
+
+def _unescape_slack_delimiters(text: str) -> str:
+    return _ESCAPED_DELIMITER.sub(lambda m: f"<{m.group(1).replace('&amp;', '&')}>", text)
+
+
 def _validate(output: dict, alert: ParsedAlert, corpus: str,
               evidence_keys: List[str], past_cases: Optional[List[dict]] = None,
               memory_records: Optional[List[dict]] = None) -> tuple:
@@ -617,7 +662,13 @@ def _validate(output: dict, alert: ParsedAlert, corpus: str,
         bad = [k for k in keys if k not in allowed_keys]
         if bad:
             raise RuntimeError(f"Investigation referenced evidence that was never captured: {bad}")
-        posts.append(PlannedPost(text=raw_post.get("text", ""), evidence_keys=keys))
+        text = raw_post.get("text", "")
+        repaired = _unescape_slack_delimiters(text)
+        if repaired != text:
+            print(f"note: un-escaped a Slack mention/link delimiter in a post "
+                  f"({text[:60]!r}) — the escaped form posts as literal text and drops "
+                  f"the ping", file=sys.stderr)
+        posts.append(PlannedPost(text=repaired, evidence_keys=keys))
 
     # Exact match only. Prefix matching would be a hole rather than a
     # convenience: with "https://veritone.atlassian.net/" anywhere in the
@@ -640,7 +691,11 @@ def _validate(output: dict, alert: ParsedAlert, corpus: str,
     if unknown:
         raise RuntimeError(f"Investigation cited message timestamps it never read: {unknown}")
 
-    mention = output.get("owning_team_mention", "") or ""
+    # Compare after the same normalization, so a mention that IS in a post but
+    # escaped differently no longer throws the whole investigation away. The
+    # guardrail itself is unchanged: a mention in no post is still a hard error,
+    # because the mention only ever reaches Slack through a post.
+    mention = _unescape_slack_delimiters(output.get("owning_team_mention", "") or "").strip()
     if mention and not any(mention in p.text for p in posts):
         raise RuntimeError(
             f"owning_team_mention {mention!r} was decided but appears in no post — the "

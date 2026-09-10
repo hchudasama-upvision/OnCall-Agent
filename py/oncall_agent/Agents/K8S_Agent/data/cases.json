@@ -2,6 +2,7 @@
   {
     "fingerprint": "KubePersistentVolumeFillingUp/*",
     "alertname": "KubePersistentVolumeFillingUp",
+    "_shared_with": "Agents/Grafana_Agent/grafana_metrics/data/cases.json carries this same alert type as the GRAPH view (dashboard uid 9192a8e8041bd567, which panel, which variables, the empty-render trap, and the PromQL for % used). Routing still sends KubePersistentVolumeFillingUp here, to the kubernetes specialist; the owner's call (2026-08-26) was that both agents keep a copy. This one is the pod/PVC-lifecycle view. Edit both or they drift.",
     "alert_pattern": "[FIRING:1] <cluster> : KubePersistentVolumeFillingUp - PVC <name> in <cluster> is only N% free",
     "environment": "any k8s cluster (seen on transcode scratch storage)",
     "occurrences_observed": 1,

@@ -17,6 +17,7 @@ from ..investigate import (
     build_prompt,
 )
 from ..types import ParsedAlert
+from .AWS_Agent import prompt as aws_prompt
 from .Edgeui_Agent import prompt as edge_ui_prompt, server as edge_ui_server
 from .Grafana_Agent import server as grafana_mcp
 from .Grafana_Agent.grafana_metrics import prompt as grafana_metrics_prompt
@@ -52,6 +53,8 @@ SPECIALISTS: Dict[str, dict] = {
                         "case_library": grafana_metrics_prompt.CASE_LIBRARY},
     "runscope": {"tools": runscope_prompt.TOOLS, "system_prompt": runscope_prompt.SYSTEM_PROMPT,
                 "case_library": runscope_prompt.CASE_LIBRARY},
+    "aws": {"tools": aws_prompt.TOOLS, "system_prompt": aws_prompt.SYSTEM_PROMPT,
+            "case_library": aws_prompt.CASE_LIBRARY},
 }
 
 

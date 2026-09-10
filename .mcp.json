@@ -1,11 +1,26 @@
 {
   "_comment": [
-    "Tools for the investigating model (see py/oncall_agent/Agents/ — one folder",
+    "Tools for the investigating model (see py/oncall_agent/Agents/ \u2014 one folder",
     "per specialist, assembled by Agents/registry.py).",
     "noc_slack    read-only Slack: what #comms-noc did for this alert before. Every",
-    "             specialist gets this one — history/case grounding is universal.",
+    "             specialist gets this one \u2014 history/case grounding is universal.",
     "noc_grafana  search dashboards, read what a panel queries, run PromQL, render a",
     "             panel. Given to the Grafana/Metrics and Kubernetes specialists.",
+    "noc_k8s      read-only kubectl against the kubeconfigs under ~/eks (see",
+    "             Agents/K8S_Agent/kubectl_client.py's credential note): unhealthy pods,",
+    "             a pod's state/events, its logs, and whether its replica peers are",
+    "             running. Given to the Kubernetes specialist only. Fixed read verbs,",
+    "             validated names, stage-only unless KUBE_ENVIRONMENTS says otherwise.",
+    "noc_aws      read-only AWS via the operator's own `aws` SSO session (see",
+    "             Agents/AWS_Agent/aws_client.py's credential note): RDS instance detail,",
+    "             CloudWatch numbers AND server-rendered graph PNGs, Performance Insights",
+    "             top SQL, RDS events. Given to the AWS specialist only. Allow-listed",
+    "             read-only subcommands \u2014 no modify/reboot/delete path exists.",
+    "noc_windows  read-only Windows VM detail: top processes by CPU/memory. Prefers",
+    "             windows_exporter metrics already in Thanos (93 hosts, NO login); falls",
+    "             back to a fixed set of read-only WinRM queries for hosts without an",
+    "             exporter (WINDOWS_USERNAME/PASSWORD in .env). Query-shaped, not",
+    "             command-shaped \u2014 see Agents/Windows_Agent/winrm_client.py.",
     "noc_edge_ui  aiWARE Edge/Controller task stats, task detail, screenshots, log",
     "             download. Given to the Edge UI/engine specialist only.",
     "noc_runscope one tool: look up the current run of the Runscope test matching an",
@@ -18,12 +33,12 @@
     "noc_jira     read-only Jira Cloud REST API (JIRA_EMAIL/JIRA_API_TOKEN in .env, see",
     "             Agents/Jira_Agent/jira_client.py): search for and read an EXISTING",
     "             ticket that already tracks this exact issue. Given to every",
-    "             specialist — unlike GitHub, a relevant Jira ticket isn't specific to",
+    "             specialist \u2014 unlike GitHub, a relevant Jira ticket isn't specific to",
     "             one alert domain (2026-08-26 example: Rekognition throttling, a",
     "             Runscope Track Job failure, and a PandoLogic disk alert all had one).",
     "",
     "All read-only apart from render_panel/capture_*_screenshot/download_*_logs,",
-    "which write evidence files into dist/evidence. None can post to Slack — the bot",
+    "which write evidence files into dist/evidence. None can post to Slack \u2014 the bot",
     "token does that, in our code, after validation.",
     "",
     "\"command\": \"python\" is only a fallback for running `claude` by hand from an",
@@ -33,39 +48,102 @@
   "mcpServers": {
     "noc_slack": {
       "command": "python",
-      "args": ["-m", "oncall_agent.slack_mcp_server"],
+      "args": [
+        "-m",
+        "oncall_agent.slack_mcp_server"
+      ],
       "cwd": "py",
-      "env": { "PYTHONUNBUFFERED": "1" }
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
     },
     "noc_grafana": {
       "command": "python",
-      "args": ["-m", "oncall_agent.Agents.Grafana_Agent.server"],
+      "args": [
+        "-m",
+        "oncall_agent.Agents.Grafana_Agent.server"
+      ],
       "cwd": "py",
-      "env": { "PYTHONUNBUFFERED": "1" }
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "noc_k8s": {
+      "command": "python",
+      "args": [
+        "-m",
+        "oncall_agent.Agents.K8S_Agent.server"
+      ],
+      "cwd": "py",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "noc_aws": {
+      "command": "python",
+      "args": [
+        "-m",
+        "oncall_agent.Agents.AWS_Agent.server"
+      ],
+      "cwd": "py",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "noc_windows": {
+      "command": "python",
+      "args": [
+        "-m",
+        "oncall_agent.Agents.Windows_Agent.server"
+      ],
+      "cwd": "py",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
     },
     "noc_edge_ui": {
       "command": "python",
-      "args": ["-m", "oncall_agent.Agents.Edgeui_Agent.server"],
+      "args": [
+        "-m",
+        "oncall_agent.Agents.Edgeui_Agent.server"
+      ],
       "cwd": "py",
-      "env": { "PYTHONUNBUFFERED": "1" }
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
     },
     "noc_runscope": {
       "command": "python",
-      "args": ["-m", "oncall_agent.Agents.Runscope_Agent.server"],
+      "args": [
+        "-m",
+        "oncall_agent.Agents.Runscope_Agent.server"
+      ],
       "cwd": "py",
-      "env": { "PYTHONUNBUFFERED": "1" }
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
     },
     "noc_github": {
       "command": "python",
-      "args": ["-m", "oncall_agent.Agents.Github_Agent.server"],
+      "args": [
+        "-m",
+        "oncall_agent.Agents.Github_Agent.server"
+      ],
       "cwd": "py",
-      "env": { "PYTHONUNBUFFERED": "1" }
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
     },
     "noc_jira": {
       "command": "python",
-      "args": ["-m", "oncall_agent.Agents.Jira_Agent.server"],
+      "args": [
+        "-m",
+        "oncall_agent.Agents.Jira_Agent.server"
+      ],
       "cwd": "py",
-      "env": { "PYTHONUNBUFFERED": "1" }
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
     }
   }
 }

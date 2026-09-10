@@ -11,6 +11,7 @@ from slack_sdk.errors import SlackApiError
 
 from . import (
     evidence_panels,
+    follow_up,
     investigate as investigate_mod,
     llm,
     slack_blocks,
@@ -229,12 +230,20 @@ def _handle_specialist(alert, config, client, log, specialist: str) -> HandledAl
     if not (config.is_live and client):
         DryRunSlackPoster(log=log).post_decided_thread(
             to_victorops_incident(alert), decision, evidence_files)
+        follow_up.schedule(alert, config, client, log=log,
+                           thread_ts=alert.reply_in_thread_ts or alert.message_ts)
         return HandledAlert(alert=alert, route=specialist)
 
     post_decided_thread(client, config.comms_channel, to_victorops_incident(alert),
                         decision, evidence_files, log=log,
                         thread_ts=alert.reply_in_thread_ts,
                         with_buttons=config.socket_mode)
+    # Some alert types get a second look a few minutes later (API response
+    # codes: the runbook's "wait 5-10 min for self-heal"). Armed only after the
+    # first post actually went out, so a follow-up can never arrive in a thread
+    # that has no first post — and by code, not by the model: follow_up.py
+    # reads the number itself and owns the threshold.
+    follow_up.schedule(alert, config, client, log=log)
     return HandledAlert(alert=alert, route=specialist,
                         thread_ts=alert.reply_in_thread_ts)
 

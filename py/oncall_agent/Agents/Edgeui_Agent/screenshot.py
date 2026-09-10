@@ -281,3 +281,182 @@ def download_task_and_job_logs(
     _download_log_via_action_menu(page, job_log_path)
 
     return LogDownloadResult(task_log_path=task_log_path, job_log_path=job_log_path, tdo_id=tdo_id)
+
+# The Backlog card on /processing/jobs/: an Ant Design card whose head title
+# reads "Backlog" (verified against a real environment 2026-08-31). Selected by
+# its TITLE rather than a generated class — `TimeSeriesChart_cardChart__9AQva`
+# is a build-hashed CSS-module name and will change on the next Edge UI deploy.
+_FIND_BACKLOG_CARD_JS = """
+() => {
+  const title = Array.from(document.querySelectorAll('.ant-card-head-title'))
+    .find(el => /^backlog\\b/i.test((el.innerText || '').trim()));
+  if (!title) return null;
+  const card = title.closest('.ant-card');
+  if (!card) return null;
+  card.scrollIntoView({block: 'center'});
+  return true;
+}
+"""
+
+# Drawn content, not just a mounted card: ApexCharts renders an <svg> with paths
+# once the data arrives, and the card shows an ant-spin spinner until then.
+# Screenshotting on a timer produced a picture of the spinner.
+_BACKLOG_READY_JS = """
+() => {
+  const title = Array.from(document.querySelectorAll('.ant-card-head-title'))
+    .find(el => /^backlog\\b/i.test((el.innerText || '').trim()));
+  if (!title) return false;
+  const card = title.closest('.ant-card');
+  if (!card) return false;
+  if (card.querySelector('.ant-spin-spinning')) return false;
+  const paths = card.querySelectorAll('svg path, svg rect, svg circle');
+  const legend = card.querySelectorAll('.apexcharts-legend-text');
+  return paths.length > 3 || legend.length > 0;
+}
+"""
+
+def capture_backlog_card(page: Page, out_path: Path, ui_base_url: str,
+                         engine: str = "", minutes: int = 360,
+                         timeout_ms: int = 45000) -> dict:
+    """Screenshot the Edge UI "Backlog" card, optionally for ONE engine.
+
+    `engine` uses the card's own behaviour, which the owner pointed out and
+    measurement confirmed: clicking an engine name in the ApexCharts legend
+    ISOLATES that series (36 legend entries and 108 paths become 1 and 3) and
+    clicking again restores all of them. It is NOT a per-series hide toggle —
+    the first attempt here assumed it was, clicked every other engine to hide
+    them, and left the chart blank with the x-axis collapsed to 00:00:00.
+    One click, then verify.
+
+    Returns {"engine", "series_shown", "same_name_series"} so the caller can
+    caption honestly: several series can share one engine name (they differ by
+    queue priority), and then the card shows one of them.
+    """
+    # A taller viewport than the session default (1280x800) is what actually
+    # keeps the sticky filter bar out of the frame: the card is ~485px tall, so
+    # centring it in an 800px window leaves its top row under the bar, and the
+    # bar's engine chip then shows in the clip's top-right corner. Centring it
+    # in 1200px clears the bar without touching the page.
+    page.set_viewport_size({"width": 1440, "height": 1200})
+    page.goto(f"{ui_base_url}/processing/jobs/", wait_until="networkidle", timeout=timeout_ms)
+    if not page.evaluate(_FIND_BACKLOG_CARD_JS):
+        raise RuntimeError("no card titled 'Backlog' on /processing/jobs/ — the Edge UI "
+                           "layout may have changed; do not attach a screenshot of "
+                           "something else")
+    page.wait_for_function(_BACKLOG_READY_JS, timeout=timeout_ms)
+
+    result = {"engine": "", "series_shown": 0, "same_name_series": 0}
+    if engine:
+        matched = page.evaluate(_ISOLATE_ENGINE_JS, engine)
+        if matched.get("error"):
+            raise RuntimeError(f"could not isolate {engine!r} in the Backlog card: "
+                               f"{matched['error']}")
+        page.wait_for_timeout(1500)
+        page.wait_for_function(_BACKLOG_READY_JS, timeout=timeout_ms)
+        visible = page.evaluate(_LEGEND_STATE_JS)["visible"]
+        # Verify the isolation took. Attaching a card that still shows every
+        # engine, captioned as one engine, is exactly the convincing-but-wrong
+        # evidence the panel-map rules exist to prevent.
+        if len(visible) != 1 or visible[0].strip().lower() != engine.strip().lower():
+            raise RuntimeError(
+                f"isolating {engine!r} did not take effect — the card still shows "
+                f"{len(visible)} series ({', '.join(visible[:4])}). Nothing was captured.")
+        result.update(engine=visible[0], series_shown=len(visible),
+                      same_name_series=matched.get("same_name_series", 1))
+
+    # Getting a clean frame took three tries, so the order here matters:
+    #   1. park the pointer — the legend click leaves an ApexCharts tooltip up;
+    #   2. scroll the card clear of the page's STICKY filter bar. Hiding
+    #      "overlapping fixed/sticky elements" alone missed it, because the chip
+    #      showing through is a statically-positioned child of a sticky
+    #      ancestor, and a computed-position test on the leaf says "static";
+    #   3. hide whatever still overlaps;
+    #   4. measure, then clip the viewport myself. locator.screenshot() scrolls
+    #      the element into view again and undid step 2, yielding a frame offset
+    #      by ~45px with the card title cut off.
+    # Park the pointer (the legend click leaves an ApexCharts tooltip up), hide
+    # anything floating over the card, then let Playwright clip the element.
+    #
+    # Two approaches were tried and rejected, both for reasons worth recording:
+    # scrolling the card clear of the sticky filter bar with window.scrollBy()
+    # does NOTHING here — this SPA scrolls an inner container, not the window,
+    # so the card ended up below the fold and the clip height went negative. And
+    # measuring the rect myself to page.screenshot(clip=...) raced Playwright's
+    # own scroll-into-view. scrollIntoView (used by _FIND_BACKLOG_CARD_JS and by
+    # locator.screenshot) is the only positioning that works, because it finds
+    # the real scrolling ancestor.
+    page.mouse.move(0, 0)
+    page.evaluate(_HIDE_OVERLAPPING_OVERLAYS_JS)
+    page.wait_for_timeout(250)
+    card = page.locator(".ant-card").filter(
+        has=page.locator(".ant-card-head-title", has_text="Backlog")).first
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    card.screenshot(path=str(out_path))
+    return result
+
+
+# Clicking ONE legend entry isolates that engine — see capture_backlog_card.
+_ISOLATE_ENGINE_JS = """
+(engine) => {
+  const title = Array.from(document.querySelectorAll('.ant-card-head-title'))
+    .find(el => /^backlog\\b/i.test((el.innerText || '').trim()));
+  const card = title && title.closest('.ant-card');
+  if (!card) return {error: 'no Backlog card'};
+  const items = Array.from(card.querySelectorAll('.apexcharts-legend-series'));
+  const named = items.filter(i => {
+    const t = ((i.querySelector('.apexcharts-legend-text') || {}).textContent || '').trim();
+    return t.toLowerCase() === engine.trim().toLowerCase();
+  });
+  if (!named.length) {
+    const available = items.map(i =>
+      ((i.querySelector('.apexcharts-legend-text') || {}).textContent || '').trim());
+    return {error: 'no legend entry named ' + engine + '. Legend has: ' +
+                   available.slice(0, 12).join(', ')};
+  }
+  named[0].click();
+  return {same_name_series: named.length};
+}
+"""
+
+_LEGEND_STATE_JS = """
+() => {
+  const title = Array.from(document.querySelectorAll('.ant-card-head-title'))
+    .find(el => /^backlog\\b/i.test((el.innerText || '').trim()));
+  const card = title.closest('.ant-card');
+  const items = Array.from(card.querySelectorAll('.apexcharts-legend-series'));
+  return {
+    visible: items
+      .filter(i => i.getAttribute('data:collapsed') !== 'true')
+      .map(i => ((i.querySelector('.apexcharts-legend-text') || {}).textContent || '').trim()),
+    total: items.length,
+  };
+}
+"""
+
+# Hide anything still floating over the card. Cosmetic only: the card itself is
+# never modified, and nothing carrying data is touched.
+_HIDE_OVERLAPPING_OVERLAYS_JS = """
+() => {
+  const title = Array.from(document.querySelectorAll('.ant-card-head-title'))
+    .find(el => /^backlog\\b/i.test((el.innerText || '').trim()));
+  const card = title && title.closest('.ant-card');
+  if (!card) return 0;
+  const target = card.getBoundingClientRect();
+  const intersects = (r) => !(r.right < target.left || r.left > target.right ||
+                              r.bottom < target.top || r.top > target.bottom);
+  let hidden = 0;
+  document.querySelectorAll('body *').forEach(el => {
+    if (el === card || card.contains(el) || el.contains(card)) return;
+    const cs = getComputedStyle(el);
+    const floating = cs.position === 'fixed' || cs.position === 'sticky' ||
+                     /apexcharts-tooltip/.test((el.className || '').toString());
+    if (!floating || cs.visibility === 'hidden') return;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0 || !intersects(r)) return;
+    el.style.visibility = 'hidden';
+    hidden++;
+  });
+  return hidden;
+}
+"""
+

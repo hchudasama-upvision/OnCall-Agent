@@ -7,6 +7,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from .alert_parser import parse_alert_message
+from . import follow_up
 from .config import AgentConfig, describe
 from .handler import HandledAlert, SeenStore, handle_alert
 from .slack_history import resolve_channel_id
@@ -230,6 +231,14 @@ def run(config: AgentConfig, log=_log) -> None:
     if config.post_mode == "dry_run":
         log("POST_MODE=dry_run — investigating for real, printing instead of posting. "
             "Set POST_MODE=live in .env to post to Slack.")
+    # A re-check armed before the last restart still owes its thread an answer.
+    # Timers are in-process, so without this the second post is lost exactly
+    # when it matters most: these alerts cluster around deploys, which is also
+    # when the agent gets restarted.
+    try:
+        follow_up.resume_pending(config, client, log=log)
+    except Exception as e:                              # noqa: BLE001 — never block startup
+        log(f"could not resume pending follow-ups: {type(e).__name__}: {e}")
     if config.socket_mode:
         run_socket_mode(config, client, log=log)
     else:
