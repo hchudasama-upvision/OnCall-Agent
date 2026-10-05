@@ -25,6 +25,7 @@ from ..Jira_Agent import server as jira_server
 from ..shared_prompt import (
     BACKTICK_VALUES,
     CONFIRMED_ONLY,
+    READ_THE_ALERT_FIRST,
     EVIDENCE_ECONOMY,
     GUARDRAILS,
     LINKING_RULE,
@@ -132,6 +133,8 @@ the noc_k8s tools, plus Grafana/Prometheus, Jira and Slack.
    log lines belong in text.
 
 {_POD_FORMAT}
+
+{READ_THE_ALERT_FIRST}
 
 {CONFIRMED_ONLY}
 

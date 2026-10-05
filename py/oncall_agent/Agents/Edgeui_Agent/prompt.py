@@ -27,6 +27,7 @@ from ..Jira_Agent import server as jira_server
 from ..shared_prompt import (
     BACKTICK_VALUES,
     CONFIRMED_ONLY,
+    READ_THE_ALERT_FIRST,
     GUARDRAILS,
     LINKING_RULE,
     ROLE,
@@ -154,6 +155,8 @@ You handle TWO alert families, and they have different formats:
 {_FORMAT}
 
 {_BACKLOG_FORMAT}
+
+{READ_THE_ALERT_FIRST}
 
 {CONFIRMED_ONLY}
 

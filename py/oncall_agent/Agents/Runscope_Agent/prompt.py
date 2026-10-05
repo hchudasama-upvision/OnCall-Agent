@@ -12,6 +12,7 @@ from ..Jira_Agent import server as jira_server
 from ..shared_prompt import (
     BACKTICK_VALUES,
     CONFIRMED_ONLY,
+    READ_THE_ALERT_FIRST,
     EVIDENCE_ECONOMY,
     GUARDRAILS,
     LINKING_RULE,
@@ -42,6 +43,8 @@ Runscope test.
    guessing — this alert type may not actually be Runscope-backed despite the routing
    guess. "No Runscope test matches this alert name" is a complete answer; do not fill
    the gap with what the test probably does.
+
+{READ_THE_ALERT_FIRST}
 
 {CONFIRMED_ONLY}
 

@@ -592,6 +592,184 @@ Three lineages merged here:
   panels -> one, the inferred "this reads as a misconfigured or stale rule"
   verdict gone, and values now rendering as `118.5%` / `now-6h` /
   `Rubrik_LastBackup` with the mention left bare so it still pings.
+- **Keeping the inventories level with reality is a SKILL, not a daemon
+  (2026-09-12, owner).** The case libraries go stale two ways: the alerts change
+  (new types, new labels, a changed transmitter template) and the METHOD changes
+  (the NOC engineers start handling an alert differently, which only ever shows
+  up in #comms-noc). The owner asked for something that runs daily or weekly and
+  catches both.
+  It cannot be a background agent. Reading those channels needs
+  veritone.slack.com access, and this repo has none: the bot token answers
+  `missing_scope` on both and belongs to a different workspace, while headless
+  `claude -p` has no claude.ai connector (both already documented above).
+  Claude Code, interactively, is the only thing in this system that can read
+  them — so the procedure lives in `.claude/skills/daily-update/SKILL.md` as
+  instructions to it, and the cadence is the owner running it.
+  The split follows non-negotiable #1. `py/scripts/inventory_gaps.py` is the
+  deterministic half: it parses the scanned cards with the pipeline's own
+  `alert_parser` and reports UNROUTED / NO CASE / NO alert_payload BLOCK /
+  UNDOCUMENTED LABELS / RESOLUTION TIME DRIFT per alert type. The model's half
+  is deciding what to WRITE about each finding. Nothing auto-commits: the skill
+  shows the proposed edits first.
+  THE SCAN IS SAVED VERBATIM TO A FILE and the script reads the connector's own
+  dump format. That is the whole anti-fabrication design here — a model
+  summarising a payload paraphrases it, and a paraphrased label name IS a
+  fabricated one. Cards go to disk as Slack returned them, so every finding
+  traces to real bytes.
+  It earned its keep on the first run: `typical_resolution_minutes: 60` on
+  KubePodsNotReady was wrong. The real stamps say `9` minutes (#121443) and
+  `1441` — a full day (#121465). That number is now null with the range recorded
+  instead, because there is no typical duration for this alert.
+
+- **The alert's own Summary/Description/Labels are parsed now (2026-09-12,
+  owner).** The owner's point: the case work on 2026-09-11 keyed off alert
+  TITLES, while the payload carries the identifiers — "in that summary contains
+  orgName, engName and many other things. so, our program should actually take
+  actions from that description too."
+  THE TEMPLATE CHANGED UNDER US. `fixtures/alerts-devops-real.json` (captured
+  2026-08-24) has `state_message: *Alertmanager:* <url>` and nothing else.
+  Every live Alertmanager card in the channel today carries, per sub-alert, a
+  `*Summary:*`, a `*Description:*`, sometimes a `*Runbook:*`, a `*Labels:*`
+  list and `*Started:*`/`*Resolved:*`. Nothing in the repo parsed it, because
+  it did not exist when the parser was written.
+  Three measured bugs, not one missing feature:
+  (1) `_extract_fields` is line-based, so `state_message` held only its FIRST
+  LINE and the whole block below was dropped. `state_message_body()` now reads
+  the real extent, bounded at the `*Alertmanager:*` footer or the first
+  upper-case VictorOps key.
+  (2) `extract_labels` read the Summary's own parentheses as Alertmanager
+  label values — a NodeHighCPUUsage card produced `labels=['us-east-1c',
+  'us-east-1a']`, availability zones presented as label values. The
+  state_message span is now excluded from that scan. Note the exclusion must
+  slice the RAW string: doing it against the normalized body silently no-ops,
+  because the body has `&bull;` rewritten to `•`. That bug was introduced and
+  caught within this change; `state_message_span()` exists to keep the two
+  apart.
+  (3) `_FIRING` required `]` immediately after the digits, so the MIXED shape
+  `[FIRING:16 RESOLVED:5]` — the normal state of KubePodsNotReady,
+  NodeHighCPUUsage and the organization-failure alerts — matched nothing:
+  `firing_count` came back `0` and `alert_name` became the entire line,
+  heading and memory key included.
+  THE LABEL NAMES ARE TRANSMITTED HERE. `extract_labels` only ever sees
+  positional label VALUES in an Alertmanager-direct post and has to guess at
+  their meaning by shape (CLAUDE.md says as much above). The state_message
+  spells them out: `node`, `pod`, `dbinstance_identifier`, `load_balancer`,
+  `target_group`, `engineName`, `url`, `status`. A named label is not a guess,
+  so `label_hints` now prefers it and falls back to the shape rules only for
+  cards with no block. The clearest payoff is RDS: `dbinstance_identifier:
+  stage-media-rds2` is in the payload, so `follow_up._rds_instance_for` reads
+  it directly and never reaches the camelCase word-scoring — and, because no
+  AWS call is needed, the re-check still arms when the operator's SSO session
+  has expired, which is precisely when the old path returned "" and silently
+  scheduled nothing.
+  A FIRING SUB-ALERT WINS THE HINT, not the first one listed. VictorOps
+  renders RESOLVED blocks at the top: on incident #121477 the first block names
+  `ip-10-0-100-23` (recovered) and the firing one names `ip-10-0-41-41`. Taking
+  "the first block" pointed the investigation at the wrong machine — the same
+  class of bug as a wrong panel id.
+  `ParsedAlert.sub_alerts` carries every block (status, summary, description,
+  runbook, started/resolved, named labels) and `firing_sub_alerts` filters it;
+  `triage.alert_prompt_text` renders them firing-first, capped at 8 with the
+  real counts alongside, since one card can carry 230. A block cut off by
+  VictorOps mid-render is kept and flagged `truncated`, never completed by
+  guessing, and the prompt says its missing fields are UNKNOWN rather than
+  empty. `READ_THE_ALERT_FIRST` in `shared_prompt.py` binds all five
+  specialists plus both generalist prompts: identify the subject from these
+  fields before reaching for a tool, because a discovery step can land on a
+  different resource than the one that alerted.
+  The nine alert types whose exact fields were read off real cards carry an
+  `alert_payload` block in their case entry — what the Summary and Description
+  are shaped like, every label name, what to use them for, and the trap.
+  Recurring trap worth knowing before writing another: on the cloudwatch_exporter
+  alerts (RDS, ALB) `instance` is the EXPORTER, never the database or the
+  target; on the OpsProm probes it is `localhost:9100`, the prober, never the
+  URL; and on KubePodsNotReady `namespace: central-monitoring` is where the
+  RULE lives, not where the pod runs (`aiware`) — using it as the kubectl
+  namespace returns nothing.
+  `fixtures/alerts-devops-state-message.json` holds 10 verbatim cards from the
+  real channel, including the two that must keep parsing to NOTHING: a closed
+  incident, whose block VictorOps replaces wholesale with "Automatically
+  resolved", and the pre-2026-09 shape in the older fixture file. The Slack
+  connector caps an attachment near 1KB, so the long cards in that file are
+  genuinely truncated and say so in `_truncated_by_connector` — they are real
+  payloads cut short, not edited ones.
+  PASTED CARDS ARE A DIFFERENT SHAPE AGAIN (owner, 2026-09-12). When the owner
+  pastes a card as plain text rather than the agent reading it from Slack, four
+  things differ and two of them broke: there is no `*Organization:*` line, the
+  heading is plain "Incident #121608: <title>" with no portal link, the ```
+  fence is gone, and the trailing VictorOps metadata is trimmed. Without the
+  fence `monitoring_tool` glues to the end of the title line
+  ("...above 15%monitoring_tool: Alertmanager") — `_FIELD_LINE` is anchored to
+  a line start, so it came back EMPTY, and that field is what tells Runscope,
+  Email, Grafana and NOC-Automation-Script alerts apart from Alertmanager ones.
+  `_unglue_transmitter_keys` puts the three known lower-case transmitter keys
+  back on their own line; deliberately a fixed list of three rather than a
+  general mid-line "word:" rule, which would split on every "Summary:" in prose
+  and on clock times. And the paste's own "Incident #121608: " prefix was being
+  kept as the title, so `compose_top_level_text` — which adds its own reference
+  — produced "Incident #121608: Incident #121608: [FIRING:1] …". A paste
+  correctly yields NO `incident_url`, and the header falls back to plain text
+  rather than inventing a portal link.
+  THE LABEL SET IS NOT A SCHEMA. The owner's point, and it is right: "every
+  alert get different things in it". It varies between alert types AND between
+  sub-alerts of the same alert — `KubePodsNotReady` carries `owner_kind:
+  DaemonSet` on #121443 and no such label on the bare engine pods of #121450 /
+  #121465. So an `alert_payload` block in a case file describes the cards that
+  were read, never a contract: `READ_THE_ALERT_FIRST` now says to read what is
+  actually present, never to assume a label exists and never to call one absent
+  without looking. The extra label is usually the most useful thing on the card
+  — `owner_kind` answers the blast-radius question outright.
+  Also seen: `monitoring_tool: Grafana v12.1.0` on the Telestream agency alert,
+  a fourth tool alongside Alertmanager / Runscope / NOC Automation Script.
+  `replay_alert.py --incident` synthesized the PRE-2026-09 shape, so every
+  replay was testing a payload production no longer sends; it now takes
+  `--summary`, `--description`, `--labels-kv` and `--sub-alert-status`, and
+  `--fixture` reaches both fixture files.
+
+- **The case libraries were rebuilt from the real channels (2026-09-11,
+  owner).** The premise: alerts that auto-resolve were never investigated
+  deeply before, and now they can be. Scanned #alerts-devops (C909ZH4ET) and
+  #comms-noc (C01F810QM96) through the claude.ai Slack connector — NOT the
+  repo's own bot token, which cannot read either channel (`missing_scope` on
+  both; the inherited app has only chat:write + files:write, see
+  non-negotiable #4).
+  THE THREADS IN #alerts-devops CARRY NO DIAGNOSIS. Every reply there is
+  VictorOps ACK/RESOLVE bookkeeping. The investigations live in #comms-noc,
+  one thread per incident, and that is where all the knowledge below came
+  from. The alert payloads in #alerts-devops are still worth reading for two
+  things a case file cannot otherwise get: the exact label set, and the
+  Started/Resolved stamps that give a REAL typical_resolution_minutes.
+  Six alert types were firing regularly with no case entry and no route:
+  `NodeHighCPUUsage` (the most frequent VictorOps pager in the window —
+  9 occurrences, auto-resolving in a measured ~12 minutes), `ArgoCD App
+  Unhealthy`/`AutoSync Disabled`, `Organization task/job failures above …`,
+  `NOC Health Check - Systems Alerting`, `TLSCertificateExpiryUnder28d`, and
+  the whole PandoLogic Windows/IIS service-down family. All six now have a
+  case entry and a keyword route.
+  THE BIGGEST FINDING IS NOT AN ALERT TYPE. The Windows/IIS alerts are almost
+  always ANNOUNCED MAINTENANCE, and the announcement is in a channel the agent
+  was not reading: #team-noc-pandologic (C08FUDXV5T9). On 2026-09-10 one WEB30
+  restart produced ten application-pool alerts, and the on-call engineer's
+  entire resolution was quoting the engineer's own message and then verifying
+  the services came back. That is exactly what `search_recent_changes` was
+  built for and `CHANGE_CHANNELS` was empty — .env.example now names the
+  confirmed channel id (still empty by default, still refusing to confuse
+  "unconfigured" with "no change found").
+  Four existing cases were corrected rather than extended: the RDS case
+  claimed only a `Core` variant when `…AvgCriticalMedia` fires too and the
+  suffix names the DATABASE FAMILY while the preceding segment names the
+  ENVIRONMENT (`us-1 : stage - …Media` is stage-media-rds2, not prod);
+  KubePodsNotReady gained the dependency-failure pattern (all 8 Error pods
+  failing on the same `edge-storage-server-5` inside a 3-minute window, the
+  StatefulSet healthy by the time anyone looked, and the stale pods needing a
+  manual delete because they do not clear themselves); the Runscope case
+  matched only `Track Job` while `Essentials - UK Prod` pages under the same
+  monitor family with no alertname-shaped token in its title; and the
+  engine-failure case's WideOrbit and Docling entries were re-confirmed still
+  firing on 2026-09-11.
+  Every claim in those entries is quoted from a thread that was actually read,
+  with the permalink in the entry. Nothing was inferred from the alert name.
+
 - **Read-only GitHub and Jira tools (2026-08-26), `Agents/Github_Agent/` and
   `Agents/Jira_Agent/`.** A real code regression (GitHub) or an
   already-filed ticket (Jira) is frequently the actual answer to "why is

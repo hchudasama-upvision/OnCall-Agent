@@ -28,7 +28,22 @@ _FIELD_LINE = re.compile(
 )
 
 # "[FIRING:3] aiw-prd5001 : Engine failure rate above 15% (http://...)"
-_FIRING = re.compile(r"\[(FIRING|RESOLVED|CRITICAL|WARNING):?(\d*)\]\s*(.*)", re.IGNORECASE)
+#
+# A card can carry BOTH counts — "[FIRING:16 RESOLVED:5] aiw-uk1001 :
+# KubePodsNotReady" — whenever some sub-alerts recovered while others still
+# fire, which is the normal state of KubePodsNotReady, NodeHighCPUUsage and the
+# organization-failure alerts. The original pattern required "]" immediately
+# after the digits, so it matched NONE of those: firing_count came back `0` and
+# _alert_name_from fell through to the bare path and returned the ENTIRE line
+# ("[FIRING:16 RESOLVED:5] aiw-uk1001 : KubePodsNotReady") as the alertname,
+# which then went into the thread heading and the memory key. The trailing
+# groups are consumed but deliberately not captured: the FIRING count is the
+# one that says how much is still wrong.
+_FIRING = re.compile(
+    r"\[(FIRING|RESOLVED|CRITICAL|WARNING):?(\d*)"
+    r"(?:\s+(?:FIRING|RESOLVED|CRITICAL|WARNING):?\d*)*\]\s*(.*)",
+    re.IGNORECASE,
+)
 
 _INCIDENT_NUMBER = re.compile(r"[Ii]ncident\s*#\s*(\d+)")
 _INCIDENT_UPDATE = re.compile(
@@ -85,10 +100,30 @@ def flatten_message(message: dict) -> str:
     return "\n".join(p for p in parts if p).strip()
 
 
+# The three lower-case keys the VictorOps transmitter emits. In a real Slack
+# card the first is glued to the ``` fence ("```monitoring_tool: Alertmanager"),
+# which _FIELD_LINE's leading [`\s]* already absorbs. In a card PASTED as plain
+# text the fence is gone and it glues to whatever ended the title line instead
+# ("...above 15%monitoring_tool: Alertmanager"), so the line-anchored regex
+# misses it and monitoring_tool comes back empty — which is what tells Runscope,
+# Email and NOC-Automation-Script alerts apart from Alertmanager ones.
+# Deliberately a fixed list of three, not a general mid-line "word:" rule: a
+# general rule would split on every "Summary:" inside prose and on clock times.
+_GLUED_KEY = re.compile(
+    r"(?<=\S)(?=(?:monitoring_tool|entity_display_name|state_message)\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _unglue_transmitter_keys(text: str) -> str:
+    """Put a glued transmitter key back on its own line."""
+    return _GLUED_KEY.sub("\n", text or "")
+
+
 def _extract_fields(text: str) -> Dict[str, str]:
     """Upper-case KEY: value pairs, normalized to UPPER_SNAKE keys."""
     fields: Dict[str, str] = {}
-    for key, value in _FIELD_LINE.findall(text):
+    for key, value in _FIELD_LINE.findall(_unglue_transmitter_keys(text)):
         normalized = re.sub(r"\s+", "_", key.strip()).upper()
         fields.setdefault(normalized, _unlink(value).strip())
     return fields
@@ -285,6 +320,14 @@ def parse_alert_message(message: dict, channel_id: str = "", permalink: str = ""
         # Alertmanager posts have no heading — their first line is the title,
         # minus the trailing "(...)" groups that read as noise in a header.
         first_line = next((line.strip() for line in flat.splitlines() if line.strip()), "")
+        # A card PASTED as plain text keeps the words "Incident #121608: " on
+        # that first line, because the linked-heading form the regex above
+        # looks for ("*<url|Incident #N>: title*") is flattened away when a
+        # human copies it. Left in, it is emitted a SECOND time by
+        # compose_top_level_text, which adds its own reference — the header
+        # read "Incident #121608: Incident #121608: [FIRING:1] ...". The
+        # number is already captured separately, so strip the prefix.
+        first_line = re.sub(r"^\*?\s*Incident\s*#\d+\s*:\s*", "", first_line).strip()
         incident_name = strip_trailing_groups(first_line) or first_line
 
     # Prefer the heading title: it is already unwrapped and free of the
@@ -293,8 +336,26 @@ def parse_alert_message(message: dict, channel_id: str = "", permalink: str = ""
         or _alert_name_from(flat) or _first(fields, "ALERTNAME", "ALERT_NAME")
     env_key = extract_environment_key(flat) or ""
 
-    labels = extract_labels(raw)
-    hints = label_hints(labels)
+    # The state_message block, when the card carries one. Parsed BEFORE the
+    # positional labels because it changes where those may legitimately come
+    # from: the Summary lines contain parentheses of their own ("High CPU:
+    # ... (us-east-1c)"), and extract_labels read those availability zones as
+    # if they were Alertmanager label values. Measured on incident #121477.
+    sub_alerts = parse_state_message(raw)
+    label_source = raw
+    if sub_alerts:
+        span = state_message_span(raw)
+        if span:
+            label_source = raw[:span[0]] + " " + raw[span[1]:]
+
+    labels = extract_labels(label_source)
+    # Named labels first: `dbinstance_identifier`, `node`, `pod`,
+    # `load_balancer` are transmitted by NAME here, so they are facts rather
+    # than the shape-based guesses label_hints() has to make from a bare list
+    # of values. The guesses stay as the fallback for cards with no block.
+    hints = named_label_hints(sub_alerts)
+    for key, value in label_hints(labels).items():
+        hints.setdefault(key, value)
     if env_key:
         hints.setdefault("env", env_key)
     if not _FIRING.search(flat) and incident_name:
@@ -326,7 +387,10 @@ def parse_alert_message(message: dict, channel_id: str = "", permalink: str = ""
         # monitoring_tool is the real source ("Alertmanager", "NOC Automation
         # Script"), so it has to win.
         monitoring_tool=_first(fields, "MONITORING_TOOL", "MONITOR_TYPE"),
-        state_message=_first(fields, "STATE_MESSAGE", "MESSAGE", "DESCRIPTION", "SUMMARY"),
+        # The FULL block, not the first line _extract_fields could see — the
+        # Summary/Description/Labels below it were being dropped silently.
+        state_message=(state_message_body(raw)
+                       or _first(fields, "STATE_MESSAGE", "MESSAGE", "DESCRIPTION", "SUMMARY")),
         escalation_policy=_first(fields, "ESCALATION_POLICY", "CONTACTGROUPNAME",
                                  "ROUTING_KEY", "PAGING_POLICY"),
         alert_name=alert_name,
@@ -336,6 +400,7 @@ def parse_alert_message(message: dict, channel_id: str = "", permalink: str = ""
         labels=labels,
         label_hints=hints,
         fields=fields,
+        sub_alerts=sub_alerts,
     )
 
 
@@ -416,3 +481,184 @@ def window_minutes_from(alert: ParsedAlert, default: int = 15) -> int:
         return default
     amount = int(m.group(1))
     return amount * 60 if m.group(2).lower() == "hour" else amount
+
+
+# --------------------------------------------------------- the state_message
+# body: Summary / Description / Labels, per sub-alert
+#
+# Added 2026-09-12 after scanning the real channel. The Alertmanager ->
+# VictorOps template gained this block somewhere between 2026-08-24 and
+# 2026-09-11: the cards in fixtures/alerts-devops-real.json carry
+# "state_message: *Alertmanager:* <url>" and nothing else, while every
+# Alertmanager card in the channel today carries one block PER SUB-ALERT:
+#
+#     state_message: &bull; *[RESOLVED] NodeHighCPUUsage*
+#       *Summary:* High CPU: engine_segregated node in aiw-prod1001 (us-east-1c)
+#       *Description:* Node ip-10-0-100-23.ec2.internal [...] VALUE = 96.188
+#       *Runbook:* <https://...>            (engine-failure alerts only)
+#       *Labels:*
+#         - env: aiw-prod1001
+#         - node: ip-10-0-100-23.ec2.internal
+#         ...
+#       *Started:* 2026-09-11 10:19:47 UTC
+#       *Resolved:* 2026-09-11 10:31:47 UTC
+#     &bull; *[FIRING] NodeHighCPUUsage*
+#       ...
+#     *Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>
+#
+# This matters more than it looks. The LABEL NAMES are transmitted here —
+# `dbinstance_identifier`, `node`, `pod`, `load_balancer`, `engineName` — while
+# extract_labels() above only ever sees positional label VALUES in the
+# parentheses of an Alertmanager-direct post and has to guess at their meaning
+# by shape. A named label is not a guess, so when this block is present it is
+# the better source and label_hints prefers it.
+#
+# Three traps, all hit on real payloads:
+#  1. The bullet arrives HTML-ESCAPED as "&bull;", not "•".
+#  2. _extract_fields() is line-based, so STATE_MESSAGE captured only the FIRST
+#     LINE and the whole block below it was silently dropped.
+#  3. The card is truncated mid-block when it carries many sub-alerts, so the
+#     last block can end anywhere — after "*Labels:*" with no labels, or
+#     halfway through a value. A partial block is kept and flagged, never
+#     discarded and never completed by guessing.
+_SUB_ALERT_SPLIT = re.compile(r"(?:&bull;|•)\s*\*\[", re.IGNORECASE)
+_SUB_ALERT_HEAD = re.compile(r"^(FIRING|RESOLVED)\]\s*\*?(.*?)\*?\s*$",
+                             re.IGNORECASE | re.MULTILINE)
+_SUB_FIELD = re.compile(r"^\s*\*(Summary|Description|Runbook|Started|Resolved)\s*:\*\s*(.*?)\s*$",
+                        re.MULTILINE)
+_SUB_LABEL = re.compile(r"^\s*-\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*?)\s*$", re.MULTILINE)
+# Where the per-sub-alert blocks stop and VictorOps' own metadata begins.
+_STATE_MESSAGE_END = re.compile(
+    r"^\s*(?:\*Alertmanager:\*|[A-Z][A-Z0-9_]{2,}\s*:)", re.MULTILINE
+)
+
+
+def state_message_span(raw_text: str) -> Optional[tuple]:
+    """(start, end) of the state_message body inside the RAW text, or None.
+
+    Kept separate from state_message_body because the body is normalized for
+    display and the span is not: callers that need to EXCLUDE this region from
+    some other scan (extract_labels does) must slice the raw string, or the
+    normalization makes the two disagree and the exclusion silently no-ops.
+    That is a bug this function exists to have already fixed once.
+    """
+    # NOT anchored to the start of a line, and NOT un-glued first: the span is
+    # sliced out of the ORIGINAL string by the caller, so inserting newlines
+    # here would shift every offset past the insertion point and the slice
+    # would come back misaligned. (Exactly the raw-vs-normalized mismatch this
+    # function was created to prevent — reintroduced once while fixing pasted
+    # cards, caught by test_state_message_sub_alerts.)
+    match = re.search(r"state_message\s*:[ \t]*(.*)$", raw_text or "",
+                      re.MULTILINE | re.IGNORECASE)
+    if not match:
+        return None
+    start = match.start(1)
+    rest = (raw_text or "")[start:]
+    end = _STATE_MESSAGE_END.search(rest)
+    return (start, start + (end.start() if end else len(rest)))
+
+
+def state_message_body(raw_text: str) -> str:
+    """The FULL state_message, not just its first line.
+
+    `_extract_fields` is line-based by design (the metadata block really is
+    one KEY: value per line), so it cannot carry this. Bounded at the first
+    VictorOps metadata key or the "*Alertmanager:*" footer, so none of that
+    leaks into the body.
+    """
+    span = state_message_span(raw_text)
+    if not span:
+        return ""
+    body = (raw_text or "")[span[0]:span[1]].strip().rstrip("`").strip()
+    # Cosmetic only, and deliberately just this one entity: the bullet arrives
+    # as "&bull;" and reads as noise in the prompt. Nothing else is unescaped
+    # here — an entity inside a URL or an evidence key must stay exactly as the
+    # payload had it, so the fabrication guardrail keeps its exact-match
+    # property (non-negotiable #2).
+    return body.replace("&bull;", "\u2022")
+
+
+def parse_state_message(raw_text: str) -> List[dict]:
+    """One dict per sub-alert in the card's state_message.
+
+    Returns [] for the shapes that have no such block — the Zabbix/Runscope/
+    NOC-Health-Check cards, and any Alertmanager card whose state_message
+    VictorOps has replaced with "Automatically resolved" once the incident
+    closed (that replacement is real and common: the rich block is only
+    present while the incident is live).
+    """
+    body = state_message_body(raw_text)
+    if not body:
+        return []
+    chunks = _SUB_ALERT_SPLIT.split(body)
+    if len(chunks) < 2:                     # no bullet -> not this shape
+        return []
+
+    out: List[dict] = []
+    for chunk in chunks[1:]:
+        head = _SUB_ALERT_HEAD.search(chunk)
+        if not head:
+            continue
+        sub = {
+            "status": head.group(1).upper(),
+            "alertname": _unlink(head.group(2)).strip(),
+            "summary": "",
+            "description": "",
+            "runbook": "",
+            "started": "",
+            "resolved": "",
+            "labels": {},
+            "truncated": False,
+        }
+        rest = chunk[head.end():]
+        for key, value in _SUB_FIELD.findall(rest):
+            sub.setdefault(key.lower(), "")
+            if not sub[key.lower()]:
+                sub[key.lower()] = _unlink(value).strip()
+        labels_at = re.search(r"^\s*\*Labels:\*\s*$", rest, re.MULTILINE)
+        if labels_at:
+            label_block = rest[labels_at.end():]
+            stop = re.search(r"^\s*\*(?:Started|Resolved|Summary|Description|Runbook):\*",
+                             label_block, re.MULTILINE)
+            if stop:
+                label_block = label_block[:stop.start()]
+            for name, value in _SUB_LABEL.findall(label_block):
+                sub["labels"].setdefault(name, _unlink(value).strip())
+        # A block cut off mid-render. EVERY complete block observed carries a
+        # *Started:* line — it is the last thing before the next bullet — so a
+        # block with a summary and no Started is a tail that got cut, even when
+        # its labels made it through intact. That case is real: a card pasted by
+        # hand ends wherever the person stopped copying, and the final block had
+        # a full label list and no Started. Without the flag the model is free
+        # to report that resource as having no start time, which is a fact the
+        # payload never carried.
+        if labels_at and not sub["labels"]:
+            sub["truncated"] = True
+        if sub["summary"] and not sub["started"]:
+            sub["truncated"] = True
+        out.append(sub)
+    return out
+
+
+def named_label_hints(sub_alerts: List[dict]) -> Dict[str, str]:
+    """Named labels from the sub-alerts, a FIRING one winning.
+
+    Firing first and not merely first-listed: a card routinely mixes both
+    ("[FIRING:1 RESOLVED:2]") and VictorOps renders the RESOLVED ones at the
+    top, so taking the first block made `node` the machine that recovered 40
+    minutes ago rather than the one still above threshold — measured on
+    incident #121477, where the resolved block names ip-10-0-100-23 and the
+    firing block names ip-10-0-41-41. A hint that points at the recovered
+    resource sends the investigation at the wrong machine, which is the same
+    class of bug as a wrong panel id.
+
+    Where several firing sub-alerts disagree (9 nodes on one card), the count
+    is itself the finding and `sub_alerts` still carries every one of them.
+    """
+    firing = [s for s in sub_alerts if str(s.get("status", "")).upper() == "FIRING"]
+    hints: Dict[str, str] = {}
+    for sub in (firing or sub_alerts):
+        for name, value in (sub.get("labels") or {}).items():
+            if value and name not in hints:
+                hints[name] = value
+    return hints

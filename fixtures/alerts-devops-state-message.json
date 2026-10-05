@@ -1,0 +1,171 @@
+[
+  {
+    "_case": "NodeHighCPUUsage — 9 sub-alerts, mixed FIRING/RESOLVED, complete",
+    "_incident": 121477,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "_note": "Two of the nine sub-alerts; the connector caps the attachment at ~1KB. The two shown are verbatim. The RESOLVED one is rendered FIRST by VictorOps.",
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789121964.747289",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121477|Incident #121477>: [FIRING:9] aiw-prod1001 : NodeHighCPUUsage*\n[FIRING:9] aiw-prod1001 : NodeHighCPUUsage\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:9] aiw-prod1001 : NodeHighCPUUsage\nstate_message: &bull; *[RESOLVED] NodeHighCPUUsage*\n  *Summary:* High CPU: engine_segregated node in aiw-prod1001 (us-east-1c)\n  *Description:* Node ip-10-0-100-23.ec2.internal [engine_segregated, us-east-1c] in cluster aiw-prod1001 has CPU above 90% for 15+ minutes. VALUE = 96.18883101851006\n  *Labels:*\n    - env: aiw-prod1001\n    - instance: 10.0.100.23:9100\n    - namespace: central-monitoring\n    - node: ip-10-0-100-23.ec2.internal\n    - server_type: engine_segregated\n    - severity: critical\n    - zone: us-east-1c\n  *Started:* 2026-09-11 10:19:47 UTC\n  *Resolved:* 2026-09-11 10:31:47 UTC\n&bull; *[FIRING] NodeHighCPUUsage*\n  *Summary:* High CPU: engine_segregated node in aiw-prod1001 (us-east-1a)\n  *Description:* Node ip-10-0-41-41.ec2.internal [engine_segregated, us-east-1a] in cluster aiw-prod1001 has CPU above 90% for 15+ minutes. VALUE = 92.73020833331464\n  *Labels:*\n    - env: aiw-prod1001\n    - instance: 10.0.41.41:9100\n    - namespace: central-monitoring\n    - node: ip-10-0-41-41.ec2.internal\n    - server_type: engine_segregated\n    - severity: critical\n    - zone: us-east-1a\n  *Started:* 2026-09-11 07:47:47 UTC\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121477\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:9] aiw-prod1001 : NodeHighCPUUsage\n```"
+      }
+    ]
+  },
+  {
+    "_case": "RDS_CPUUtilizationAvgCriticalMedia — dbinstance_identifier names the database",
+    "_incident": 121453,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": false,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789095924.534489",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121453|Incident #121453>: [FIRING:1] us-1 : stage - RDS_CPUUtilizationAvgCriticalMedia*\n[FIRING:1] us-1 : stage - RDS_CPUUtilizationAvgCriticalMedia\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] us-1 : stage - RDS_CPUUtilizationAvgCriticalMedia\nstate_message: &bull; *[RESOLVED] stage - RDS_CPUUtilizationAvgCriticalMedia*\n  *Summary:* Postgres average CPU utilization has reached 50 for at least 10m\n  *Description:* Postgres stage-media-rds2 average CPU utilization has reached 50 for at least 10m\n  *Labels:*\n    - dbinstance_identifier: stage-media-rds2\n    - env: us-1\n    - exported_job: aws_rds\n    - instance: 10.11.10.157:10003\n    - job: cloudwatch_exporter\n    - namespace: central-monitoring\n    - receive: true\n    - severity: critical\n    - tenant_id: prometheus-prod\n  *Started:* 2026-09-10 02:34:47 UTC\n  *Resolved:* 2026-09-11 21:30:47 UTC\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121453\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:1] us-1 : stage - RDS_CPUUtilizationAvgCriticalMedia\n```"
+      }
+    ]
+  },
+  {
+    "_case": "Engine failure rate above 15% — engineName label plus a real Runbook URL",
+    "_incident": 121479,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": false,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789123294.545829",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121479|Incident #121479>: [FIRING:1] aiw-prod1001 : Engine failure rate above 15%*\n[FIRING:1] aiw-prod1001 : Engine failure rate above 15%\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] aiw-prod1001 : Engine failure rate above 15%\nstate_message: &bull; *[RESOLVED] Engine failure rate above 15%*\n  *Summary:* aiw-prod1001 - Engine: WideOrbit Traffic has failure rate above 15% over last 15 minutes.\n  *Description:* Environment: aiw-prod1001 has a high engine failure rate (value: 92.86%) for Engine: WideOrbit Traffic over last 15 minutes.\n  *Runbook:* <https://veritone.atlassian.net/wiki/spaces/DEV/pages/3387588703/Runbook+Engine+failure+rate+over+15>\n  *Labels:*\n    - engineName: WideOrbit Traffic\n    - env: aiw-prod1001\n    - namespace: central-monitoring\n    - severity: critical\n  *Started:* 2026-09-11 10:40:57 UTC\n  *Resolved:* 2026-09-11 10:54:57 UTC\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121479\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:1] aiw-prod1001 : Engine failure rate above 15%\n```"
+      }
+    ]
+  },
+  {
+    "_case": "Organization task failures above 10 — org name + uuid + engine + counts in the description",
+    "_incident": 121455,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "_note": "The description is cut mid-sentence by the connector, exactly as a long card is cut in Slack.",
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789099012.693889",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121455|Incident #121455>: [FIRING:8 RESOLVED:1] aiw-prod1001 : Organization task failures above 10 or greater than 50%*\n[FIRING:8 RESOLVED:1] aiw-prod1001 : Organization task failures above 10 or greater than 50%\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:8 RESOLVED:1] aiw-prod1001 : Organization task failures above 10 or greater than 50%\nstate_message: &bull; *[RESOLVED] Organization task failures above 10 or greater than 50%*\n  *Summary:* aiw-prod1001 - Cumulus - Washington, DC: 11 failed tasks on TV and Radio Adapter V3F in the last 5h\n  *Description:* Org Cumulus - Washington, DC (f8f25104-747b-4827-b7bd-e959f1dbeb86) had 11 failed tasks in the last 5h on TV and Radio Adapter V3F. Fires at 10+ failed tasks on one engine, or when over 50% of ALL the org's tasks failed (also needs 10+ failures). The percentage is per organization across every engine, matching the Edge\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121455\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:8 RESOLVED:1] aiw-prod1001 : Organization task failures above 10 or greater than 50%\n```"
+      }
+    ]
+  },
+  {
+    "_case": "Organization job failures above 5 — org with NO name renders its uuid twice",
+    "_incident": 121458,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789103554.655149",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121458|Incident #121458>: [FIRING:1] aiw-dmh1001 : Organization job failures above 5 or greater than 50%*\n[FIRING:1] aiw-dmh1001 : Organization job failures above 5 or greater than 50%\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] aiw-dmh1001 : Organization job failures above 5 or greater than 50%\nstate_message: &bull; *[RESOLVED] Organization job failures above 5 or greater than 50%*\n  *Summary:* aiw-dmh1001 - d5c149f5-f5e2-49c9-9450-11cec4a43683: 5 failed jobs on SI2 audio/video Chunk creator\n  *Description:* Org d5c149f5-f5e2-49c9-9450-11cec4a43683 (d5c149f5-f5e2-49c9-9450-11cec4a43683) had 5 failed jobs in the last 5h, attributed to SI2 audio/video Chunk creator because that engine ran the task that failed. Fires at 5+ failed jobs, or when over 50% of the org's jobs failed. The 50% branch needs org_stats_org_jobs, which only exists once the current org_stats.sh is d\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121458\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:1] aiw-dmh1001 : Organization job failures above 5 or greater than 50%\n```"
+      }
+    ]
+  },
+  {
+    "_case": "EndpointDown — one sub-alert per endpoint, TLS fields ride along",
+    "_incident": 121459,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789104412.704729",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121459|Incident #121459>: [FIRING:32] ops-prom : EndpointDown*\n[FIRING:32] ops-prom : EndpointDown\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:32] ops-prom : EndpointDown\nstate_message: &bull; *[FIRING] EndpointDown*\n  *Summary:* Endpoint Down: <https://jenkins.us-1.veritone.com>\n  *Description:* The endpoint <https://jenkins.us-1.veritone.com> in environment Z04938931Y28CFARQSX47 is returning status CONNECTION_ERROR but expected 403.\n  *Labels:*\n    - cert_available: 1\n    - cert_expiry_days: 107\n    - cert_issuer: Amazon\n    - env: ops-prom\n    - environment: Z04938931Y28CFARQSX47\n    - expected_status_code: 403\n    - expiry_date: 27-12-2026\n    - instance: localhost:9100\n    - job: node-exporter\n    - monitor: OpsProm\n    - namespace: central-monitoring\n    - receive: true\n    - severity: critical\n    - status: CONNECTION_ERROR\n    - tenant_id: prometheus-prod\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121459\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:32] ops-prom : EndpointDown\n```"
+      }
+    ]
+  },
+  {
+    "_case": "TLSCertificateExpiryUnder28d — a NEGATIVE day count means already expired; labels read N/A",
+    "_incident": 121471,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789115808.469769",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121471|Incident #121471>: [FIRING:25] ops-prom : TLSCertificateExpiryUnder28d*\n[FIRING:25] ops-prom : TLSCertificateExpiryUnder28d\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:25] ops-prom : TLSCertificateExpiryUnder28d\nstate_message: &bull; *[FIRING] TLSCertificateExpiryUnder28d*\n  *Summary:* Certificate for <https://nr16658-workflow.aws-prod.veritone.com> expires in -1 days.\n  *Description:* Certificate for <https://nr16658-workflow.aws-prod.veritone.com> will expire in under 28 days.\n  *Labels:*\n    - cert_expiry_days: N/A\n    - env: ops-prom\n    - expiry_date: N/A (N/A left)\n    - instance: localhost:9100\n    - job: node-exporter\n    - monitor: OpsProm\n    - namespace: central-monitoring\n    - receive: true\n    - severity: critical\n    - site_label: automate-workflows\n    - tenant_id: prometheus-prod\n    - url: <https://nr16658-workflow.aws-prod.veritone.com>\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121471\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:25] ops-prom : TLSCertificateExpiryUnder28d\n```"
+      }
+    ]
+  },
+  {
+    "_case": "ALBUnhealthyHostCritical — load_balancer/target_group labels ARE the CloudWatch dimensions",
+    "_incident": 121474,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789120898.573519",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121474|Incident #121474>: [FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical*\n[FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical\nstate_message: &bull; *[RESOLVED] uk-prod - ALBUnhealthyHostCritical*\n  *Summary:* Application Load Balancer app/uk-prod-fastcore-app-http/992c86a8ba9f5fb3 has at least 1 unhealthy instances for at least 15m\n  *Description:* Application Load Balancer app/uk-prod-fastcore-app-http/992c86a8ba9f5fb3 has unhealthy instances\n  *Labels:*\n    - env: uk-1\n    - exported_job: aws_applicationelb\n    - instance: 10.66.10.236:10003\n    - job: cloudwatch_exporter\n    - load_balancer: app/uk-prod-fastcore-app-http/992c86a8ba9f5fb3\n    - namespace: central-monitoring\n    - notifyon: alerts-devops\n    - receive: true\n    - severity: critical\n    - target_group: targetg\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121474\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:1] uk-1 : uk-prod - ALBUnhealthyHostCritical\n```"
+      }
+    ]
+  },
+  {
+    "_case": "KubePodsNotReady — one sub-alert per pod; namespace label is the RULE's, not the pod's",
+    "_incident": 121465,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": true,
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789110110.664709",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121465|Incident #121465>: [FIRING:16 RESOLVED:5] aiw-uk1001 : KubePodsNotReady*\n[FIRING:16 RESOLVED:5] aiw-uk1001 : KubePodsNotReady\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:16 RESOLVED:5] aiw-uk1001 : KubePodsNotReady\nstate_message: &bull; *[RESOLVED] KubePodsNotReady*\n  *Summary:* Pod eng-e97d1564--2e70d497-5523-4271-95cf-5cd0d8fa72d5 not ready in aiw-uk1001\n  *Description:* Pod has been in a non-ready state for more than 15 minutes.\n  *Labels:*\n    - env: aiw-uk1001\n    - namespace: central-monitoring\n    - pod: eng-e97d1564--2e70d497-5523-4271-95cf-5cd0d8fa72d5\n    - severity: critical\n  *Started:* 2026-09-10 07:59:11 UTC\n  *Resolved:* 2026-09-11 08:00:11 UTC\n&bull; *[FIRING] KubePodsNotReady*\n  *Summary:* Pod eng-e97d1564--3011ddc4-1e87-43b7-a771-7f574bcd2312 not ready in aiw-uk1001\n  *Description:* Pod has been in a non-ready state for more than 15 minutes.\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121465\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:16 RESOLVED:5] aiw-uk1001 : KubePodsNotReady\n```"
+      }
+    ]
+  },
+  {
+    "_case": "KubePodsNotReady, already closed — VictorOps REPLACES the whole block",
+    "_incident": 121450,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": false,
+    "_note": "The rich block exists only while the incident is live. This is the same alert type as above, after closure: state_message is the literal string 'Automatically resolved'.",
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789092108.403379",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121450|Incident #121450>: [FIRING:230 RESOLVED:5] aiw-prod1001 : KubePodsNotReady*\n[FIRING:230 RESOLVED:5] aiw-prod1001 : KubePodsNotReady\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:230 RESOLVED:5] aiw-prod1001 : KubePodsNotReady\nstate_message: Automatically resolved\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: RESOLVED\nCURRENT_STATE: OK\nINCIDENT_NAME: 121450\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:230 RESOLVED:5] aiw-prod1001 : KubePodsNotReady\n```"
+      }
+    ]
+  },
+  {
+    "_case": "KubePodsNotReady on a DaemonSet pod — carries an owner_kind label the engine pods do not",
+    "_incident": 121443,
+    "_captured": "2026-09-11",
+    "_truncated_by_connector": false,
+    "_note": "Same alert type as the two KubePodsNotReady cards above, with a DIFFERENT label set. Proof that the labels vary per sub-alert, not just per alert type.",
+    "text": "",
+    "bot_id": "BCT64JZ16",
+    "ts": "1789086468.507569",
+    "attachments": [
+      {
+        "text": "*Organization:* wazee-digital-inc\n*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121443|Incident #121443>: [FIRING:1] aiw-dmh1001 : KubePodsNotReady*\n[FIRING:1] aiw-dmh1001 : KubePodsNotReady\n```monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] aiw-dmh1001 : KubePodsNotReady\nstate_message: &bull; *[RESOLVED] KubePodsNotReady*\n  *Summary:* Pod nvidia-device-plugin-dmh1001-node-feature-discovery-workerdh7mx not ready in aiw-dmh1001\n  *Description:* Pod has been in a non-ready state for more than 15 minutes.\n  *Labels:*\n    - env: aiw-dmh1001\n    - namespace: central-monitoring\n    - owner_kind: DaemonSet\n    - pod: nvidia-device-plugin-dmh1001-node-feature-discovery-workerdh7mx\n    - severity: critical\n  *Started:* 2026-09-11 00:27:11 UTC\n  *Resolved:* 2026-09-11 00:36:11 UTC\n*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\nCONTACTGROUPNAME: devops-oncall\nCURRENT_ALERT_PHASE: ACKED\nCURRENT_STATE: CRITICAL\nINCIDENT_NAME: 121443\nMONITOR_TYPE: UNKNOWN\nSERVICE: [FIRING:1] aiw-dmh1001 : KubePodsNotReady\n```"
+      }
+    ]
+  },
+  {
+    "_case": "Engine failure rate — PASTED as plain text (no fence, no portal link, glued monitoring_tool)",
+    "_incident": 121608,
+    "_captured": "2026-09-12",
+    "_truncated_by_connector": false,
+    "_note": "Supplied by the owner as a paste rather than read from Slack. Four differences from the Slack card, all load-bearing: no *Organization:* line, a plain-text 'Incident #N:' heading with no portal link, no ``` fence (so monitoring_tool glues to the end of the title line), and the trailing VictorOps metadata trimmed off.",
+    "text": "Incident #121608: [FIRING:1] aiw-wpsc01 : Engine failure rate above 15%\n[FIRING:1] aiw-wpsc01 : Engine failure rate above 15%monitoring_tool: Alertmanager\nentity_display_name: [FIRING:1] aiw-wpsc01 : Engine failure rate above 15%\nstate_message: &bull; *[FIRING] Engine failure rate above 15%*\n  *Summary:* aiw-wpsc01 - Engine: AWS Rekognition - Unsafe Content (US East) V3 has failure rate above 15% over last 15 minutes.\n  *Description:* Environment: aiw-wpsc01 has a high engine failure rate (value: 91.67%) for Engine: AWS Rekognition - Unsafe Content (US East) V3 over last 15 minutes.\n  *Runbook:* https://veritone.atlassian.net/wiki/spaces/DEV/pages/3387588703/Runbook+Engine+failure+rate+over+15\n  *Labels:*\n    - engineName: AWS Rekognition - Unsafe Content (US East) V3\n    - env: aiw-wpsc01\n    - namespace: central-monitoring\n    - severity: critical\n  *Started:* 2026-09-12 06:50:57 UTC",
+    "bot_id": "",
+    "ts": "1789196457.000000",
+    "attachments": []
+  }
+]

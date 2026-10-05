@@ -2,9 +2,9 @@
   {
     "fingerprint": "EngineFailureRate/*",
     "alertname": "Engine failure rate above 15% / Engine failure rate 100%",
-    "alert_pattern": "[FIRING:1] <env> : Engine failure rate above 15%/100% (sometimes with 'for all engine in every Environment' appended \u2014 that phrase is misleading, see gotchas)",
+    "alert_pattern": "[FIRING:1] <env> : Engine failure rate above 15%/100% (sometimes with 'for all engine in every Environment' appended — that phrase is misleading, see gotchas)",
     "environment": "any aiWARE Edge/Controller environment; the specific failing engine varies incident to incident",
-    "occurrences_observed": 9,
+    "occurrences_observed": 11,
     "distinct_engines_seen": [
       "SI2 Playback segment creator",
       "THEFA Hourly Content Notifications",
@@ -14,37 +14,38 @@
       "Podcast Adapter"
     ],
     "typical_resolution_minutes": null,
-    "resolution_time_note": "No single typical duration \u2014 varies from a same-release-cycle fix (SI2 Playback: alert kept firing for days after the revert PR merged, until the fix actually deployed to the affected cluster) to weeks-open with no fix (WideOrbit: 14+ re-fires over 3+ weeks; THEFA and Docling: recurring with no fix mentioned across multiple months). Do not assume this self-resolves quickly.",
+    "resolution_time_note": "No single typical duration — varies from a same-release-cycle fix (SI2 Playback: alert kept firing for days after the revert PR merged, until the fix actually deployed to the affected cluster) to weeks-open with no fix (WideOrbit: 14+ re-fires over 3+ weeks; THEFA and Docling: recurring with no fix mentioned across multiple months). Do not assume this self-resolves quickly.",
     "diagnosis_steps": [
       "VictorOps auto-posts the alert to #comms-noc as 'Alert: Incident #NNNNN: [FIRING:1] <env> : Engine failure rate above 15%/100%' (sometimes with the engine name already appended).",
-      "On-call engineer opens Edge UI for that environment/cluster and identifies the specific failing engine and its Engine ID \u2014 the alert title's 'for all engine in every Environment' wording is often literally false; it is usually one engine failing hard.",
+      "The engine is NAMED in the card: `engineName` in the sub-alert labels, with the exact failure rate in the description ('value: 91.67%') and a real *Runbook:* URL. That replaces the discovery step this case used to open with - Edge UI now CONFIRMS the engine and supplies the Engine ID (the label carries the display name, not the UUID that the `eng-<8hex>--` pod prefix is built from). The alert title's 'for all engine in every Environment' wording is still often literally false; the label is the truth.",
       "Quantify the failure with a Tasks-page screenshot: X tasks / Y% failed in the last N minutes/hours.",
       "Classify the Error Type (bad_data / internal_error / connection / api / unknown) and paste the raw ETGN error JSON blob copied from task logs.",
       "Download and attach the job/task log zip files from Edge UI.",
-      "If infra is suspected, check pod status directly (kubectl get pods) \u2014 Running does NOT mean tasks will succeed (see gotchas).",
+      "If infra is suspected, check pod status directly (kubectl get pods) — Running does NOT mean tasks will succeed (see gotchas).",
       "If the same engine/error signature has fired before, link back to the earlier thread instead of re-diagnosing from scratch.",
-      "@-mention the person/team believed to own that engine \u2014 this is tribal knowledge, not a documented map, so expect several escalation hops for less-common engines.",
+      "@-mention the person/team believed to own that engine — this is tribal knowledge, not a documented map, so expect several escalation hops for less-common engines.",
       "Owner investigates further: reproduces locally, requests full logs, or inspects actual container/engine logs (task record's failureMsg can be null/opaque).",
       "Root cause identified: either a code fix (PR/revert) or a Jira ticket for a slower/vendor-side fix.",
       "If a deploy is required, someone explicitly confirms the rollout plan/timing before the thread is considered handled.",
-      "Alert continues re-firing until the deploy actually lands on the affected cluster, even after the fix PR is merged \u2014 do not treat 'PR merged' as 'resolved'."
+      "Alert continues re-firing until the deploy actually lands on the affected cluster, even after the fix PR is merged — do not treat 'PR merged' as 'resolved'."
     ],
     "resolution_steps": [
       "Code regression: revert the offending PR and deploy the reverted build to the SPECIFIC affected cluster (not just merge it).",
       "Third-party/vendor-side or data-quality issue: file a Jira ticket and hand off to the actual owning team rather than trying to code a fix directly.",
       "Automate/scheduled-flow issue: hand off to the flow's real auth owner to review the flow definition.",
-      "Confirmed test/non-production traffic causing false-positive failures: only silence after the engine's code owner explicitly confirms it and asks for it \u2014 never silence unilaterally.",
+      "Confirmed test/non-production traffic causing false-positive failures: only silence after the engine's code owner explicitly confirms it and asks for it — never silence unilaterally.",
       "Backlog-only failures: wait for the backlog to drain and confirm via a follow-up post rather than treating it as a code issue."
     ],
     "gotchas": [
-      "The alert text 'Engine failure rate 100% for all engine in every Environment' is misleading \u2014 in every real thread it turned out to be one specific engine, not literally all engines; confirm the actual engine name via Edge UI before acting.",
+      "The alert text 'Engine failure rate 100% for all engine in every Environment' is misleading — in every real thread it turned out to be one specific engine, not literally all engines; confirm the actual engine name via Edge UI before acting.",
       "Task-level failureMsg can be null even when there IS a real, specific root cause (WideOrbit: invisible at the task-API level for two weeks, only visible in engine container logs).",
-      "Pods in Running state does not mean tasks succeed \u2014 WideOrbit showed pods healthy while tasks kept failing.",
-      "A recurring identical-looking alert on the same engine can have a DIFFERENT root cause on a later occurrence (WideOrbit's alert re-fired for an unrelated core DB partition-write bug, VE-23618, distinct from the original VE-26846 cause) \u2014 check the current error signature, don't assume 'same alert = same cause'.",
-      "A merged/reverted fix does not mean the alert stops \u2014 check deployment status to the specific cluster, not just PR/merge status.",
+      "Pods in Running state does not mean tasks succeed — WideOrbit showed pods healthy while tasks kept failing.",
+      "A recurring identical-looking alert on the same engine can have a DIFFERENT root cause on a later occurrence (WideOrbit's alert re-fired for an unrelated core DB partition-write bug, VE-23618, distinct from the original VE-26846 cause) — check the current error signature, don't assume 'same alert = same cause'.",
+      "A merged/reverted fix does not mean the alert stops — check deployment status to the specific cluster, not just PR/merge status.",
       "A reported failure reason can be wrong at face value (Podcast Adapter reported 'connection' failures for feeds it had actually downloaded successfully).",
-      "Engine ownership is not documented anywhere obvious \u2014 expect the first (or second) person @-mentioned to disclaim ownership before the real owner is found.",
-      "Silencing an alert requires the code/engine owner's explicit sign-off tied to a specific known cause \u2014 a blanket request to silence was explicitly refused by an on-call engineer while the underlying fix still hadn't deployed."
+      "Engine ownership is not documented anywhere obvious — expect the first (or second) person @-mentioned to disclaim ownership before the real owner is found.",
+      "Silencing an alert requires the code/engine owner's explicit sign-off tied to a specific known cause — a blanket request to silence was explicitly refused by an on-call engineer while the underlying fix still hadn't deployed.",
+      "A nil failureMsg is itself a signature, not a dead end: 2026-09-11 WideOrbit reported `failureReason: internal_error, failureMsg: %!s(<nil>)` - the Go format verb leaking into the message means the engine reported no reason at all, which matches the long-standing status-poll timeout rather than a new fault."
     ],
     "escalation": "The on-call engineer always posts the Edge UI diagnosis first (engine name, failure %, error type, raw ETGN JSON, log zips) before pulling anyone in. Who gets @-mentioned depends entirely on which engine is failing and is tribal knowledge, not documented: Quynh Dang / Cameron Chunn for realtime/core engine internals (SI2 Playback); an ACI-owning chain (Tim Camara -> Alyssa Clemson -> David Sypien -> Khuong Truong) for WideOrbit Traffic; the POPS team + Bob Klaas's Engine team for Podcast Adapter data-source tickets; the flow's actual auth owner (e.g. Sven Peterson) for Automate/THEFA-style flows. Escalation commonly bounces through several names before landing on the right owner.",
     "known_root_causes": [
@@ -53,8 +54,8 @@
         "engine": "SI2 Playback segment creator",
         "cause": "The 'image2pipe fix' shipped in PR #10693 (VE-26837) broke ffmpeg streaming, causing 'SegmentIngestor: ffmpeg cmd failed: exit status 234 ... Conversion failed!' on essentially all segment-creation tasks on prd5001.",
         "fix_reference": "Original regression: PR #10693 (VE-26837). Revert: PR #10709 (commit 2470d8ae0). Required deploying realtime v3.80.4.7386+ (v3.80.4.7385 still had the bug) as part of that week's Wednesday aiware release.",
-        "status": "resolved (fix merged; rollout confirmed) \u2014 but the alert kept re-firing for days until the deploy actually landed on prd5001",
-        "deploy_verification": "Automated \u2014 a CLI/GitHub Action already checks the deployed realtime build against known-fixed versions on each cluster, independently of this agent. NEVER propose 'verify/confirm the deployed version' as a manual proposed_action for this error_code, under ANY circumstance \u2014 including when you personally cannot confirm the automation ran (list_workflow_runs failing, GitHub SSO/permission error, tool timeout, etc). A tool failure on YOUR side is a gap in your own visibility, not evidence the real automation isn't running \u2014 it keeps running whether or not you can see it. If you could not check it this run, say so once in reasoning/root_cause_narrative as a caveat, and stop there; do not turn that gap into a request for a human to act.",
+        "status": "resolved (fix merged; rollout confirmed) — but the alert kept re-firing for days until the deploy actually landed on prd5001",
+        "deploy_verification": "Automated — a CLI/GitHub Action already checks the deployed realtime build against known-fixed versions on each cluster, independently of this agent. NEVER propose 'verify/confirm the deployed version' as a manual proposed_action for this error_code, under ANY circumstance — including when you personally cannot confirm the automation ran (list_workflow_runs failing, GitHub SSO/permission error, tool timeout, etc). A tool failure on YOUR side is a gap in your own visibility, not evidence the real automation isn't running — it keeps running whether or not you can see it. If you could not check it this run, say so once in reasoning/root_cause_narrative as a caveat, and stop there; do not turn that gap into a request for a human to act.",
         "incident_refs": [
           "#119665",
           "#119666",
@@ -81,7 +82,7 @@
         "engine": "THEFA Hourly Content Notifications",
         "cause": "Scheduled job triggers an Automate/node-red flow running under Sven Peterson's auth; the node-red engine fails to start the internal flow ('Not found aiware-in node in the active flow') and a GraphQL not_found error occurs on a specific user object.",
         "fix_reference": "",
-        "status": "unresolved/recurring \u2014 as of 2026-08-24 explicitly still failing with no fix confirmed",
+        "status": "unresolved/recurring — as of 2026-08-24 explicitly still failing with no fix confirmed",
         "incident_refs": [
           "#119776",
           "#119893",
@@ -96,9 +97,10 @@
         "engine": "Docling Chunk Engine",
         "cause": "PDF downloads and is read by Docling successfully, but the chunk-splitting step returns an empty/invalid array for certain documents, so the task fails with an internal error instead of producing chunks.",
         "fix_reference": "",
-        "status": "recurring \u2014 same exact error signature recorded across Jan, Mar, May, Aug 2026 with no fix or ticket mentioned",
+        "status": "recurring — same exact error signature recorded across Jan, Mar, May, Aug 2026 with no fix or ticket mentioned; confirmed again 2026-09-11 on aiw-wpsc01 via the org-job-failures alert (#121421), same empty-array signature",
         "incident_refs": [
-          "#119679"
+          "#119679",
+          "#121421"
         ],
         "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1787298212651249?thread_ts=1787298212.651249&cid=C01F810QM96",
         "verified": false
@@ -108,7 +110,7 @@
         "engine": "WideOrbit Traffic",
         "cause": "Confirmed on WideOrbit's (third-party) side: the engine reaches WideOrbit fine, gets In_Progress for ~3 minutes, then the status poll dies with a WebException timeout after 3 retries. Deterministic per-station: the same 69 stations fail 100% and the same 15 succeed 100% every day on the identical code path (independently verified verbatim from the thread).",
         "fix_reference": "Jira VE-26846 filed to track with the vendor/SETA team; no code fix or PR confirmed merged.",
-        "status": "recurring/open \u2014 re-fired at least 14 times across 3+ weeks with no confirmed resolution",
+        "status": "recurring/open — re-fired at least 14 times across 3+ weeks with no confirmed resolution; still re-firing on 2026-09-11 (#121479, aiw-prod1001, 92.86% failure rate, internal_error.ETGN888/ETGN668 with a nil failureMsg)",
         "incident_refs": [
           "#118154",
           "#118233",
@@ -123,7 +125,8 @@
           "#119459",
           "#119827",
           "#119884",
-          "#119954"
+          "#119954",
+          "#121479"
         ],
         "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1785840930320989?thread_ts=1785840930.320989&cid=C01F810QM96",
         "verified": true
@@ -133,7 +136,7 @@
         "engine": "multiple engines (surfaced inside the WideOrbit thread, not WideOrbit-specific)",
         "cause": "Core was writing some jobs/tasks to the parent DB table instead of the correct weekly partition, so downstream systems couldn't upload results and those tasks failed with Error Type 'unknown'. 1,872 tasks created Aug 14-16 stuck retrying, causing repeated alert re-firing until cleared.",
         "fix_reference": "VE-23618 (owned by Shuwei Lin) + VE-26841 for related error-reporting.",
-        "status": "identified with an owner and ticket, not confirmed fixed within these threads \u2014 alert will keep re-firing until cleared",
+        "status": "identified with an owner and ticket, not confirmed fixed within these threads — alert will keep re-firing until cleared",
         "incident_refs": [
           "#119446",
           "#119459"
@@ -144,9 +147,9 @@
       {
         "error_code": "unknown.ETGN888 (engineHeartbeatFailureReport)",
         "engine": "Translate Foreign Audio",
-        "cause": "Not diagnosed beyond the raw error in the thread \u2014 engine heartbeat reporting the underlying Transcription/Speaker Separation job failed or was canceled; no further root-cause investigation recorded.",
+        "cause": "Not diagnosed beyond the raw error in the thread — engine heartbeat reporting the underlying Transcription/Speaker Separation job failed or was canceled; no further root-cause investigation recorded.",
         "fix_reference": "",
-        "status": "unresolved/open \u2014 thread ends after the error dump, no follow-up",
+        "status": "unresolved/open — thread ends after the error dump, no follow-up",
         "incident_refs": [
           "#119957"
         ],
@@ -158,7 +161,7 @@
         "engine": "Podcast Adapter",
         "cause": "Heterogeneous data/config issues, not an engine bug: RSS feed hosts timing out/erroring; GraphQL 'organizationId parameter is required' errors; sources owned by a different org than the scheduled job. The reported 'connection' failure reason is sometimes simply wrong for feeds that did download successfully.",
         "fix_reference": "Jira VE-27389, VE-27390, VE-27391, VE-27392 filed and handed to POPS team + Bob Klaas's Engine team.",
-        "status": "open \u2014 latest occurrence (2026-08-26) ended in ticket creation, not resolution",
+        "status": "open — latest occurrence (2026-08-26) ended in ticket creation, not resolution",
         "incident_refs": [
           "#110313",
           "#110330"
@@ -171,7 +174,22 @@
       "kubectl get pods -n aiware -l engine=<engine-id> --no-headers",
       "kubectl logs <pod> -n aiware --previous | grep -iE 'panic|fatal|context deadline|OOM|connection refused'"
     ],
-    "_note": "Built 2026-08-26 from a live investigation of 9 real #comms-noc threads (session cost ~$1.32). 'verified' = true means a second, independent read of the source thread confirmed the specific numeric/ticket claims verbatim; false means only the single research pass read it \u2014 treat those as high-confidence but not independently double-checked. Do not add an entry here without a real source_permalink read from an actual tool call."
+    "_note": "Built 2026-08-26 from a live investigation of 9 real #comms-noc threads (session cost ~$1.32). 'verified' = true means a second, independent read of the source thread confirmed the specific numeric/ticket claims verbatim; false means only the single research pass read it — treat those as high-confidence but not independently double-checked. Do not add an entry here without a real source_permalink read from an actual tool call.",
+    "alert_payload": {
+      "_verified": "incident #121479, 2026-09-11",
+      "summary": "<env> - Engine: <Engine Name> has failure rate above 15% over last 15 minutes.",
+      "description": "Environment: <env> has a high engine failure rate (value: <exact percent>) for Engine: <Engine Name> over last <window>.",
+      "runbook": "A *Runbook:* line with a real Confluence URL is present on this alert type - https://veritone.atlassian.net/wiki/spaces/DEV/pages/3387588703/Runbook+Engine+failure+rate+over+15 as of 2026-09-11. Cite the URL the payload carries, never a remembered one.",
+      "labels": [
+        "engineName",
+        "env",
+        "namespace",
+        "severity"
+      ],
+      "use_it_for": "`engineName` is a NAMED label, so the engine no longer has to be discovered in Edge UI to start - the discovery step becomes confirmation. The description's `value:` is the exact failure rate; quote it.",
+      "trap": "The engine name in the label is the display name ('WideOrbit Traffic'), not the engine UUID that the `eng-<8hex>--` pod prefix is built from - you still need Edge UI to connect the two.",
+      "_shared": "The parser now hands you these already split out, under 'sub-alerts parsed from state_message', with the FIRING ones listed first. Read them instead of re-reading the raw card. The block is only present while the incident is live — once VictorOps closes it the whole thing is replaced by 'Automatically resolved', and a block can be marked truncated, which means its missing fields are UNKNOWN rather than empty."
+    }
   },
   {
     "fingerprint": "EngineBacklogCritical/*",
@@ -181,10 +199,10 @@
     "occurrences_observed": 4,
     "typical_resolution_minutes": 90,
     "diagnosis_steps": [
-      "fetch_engine_backlog(environment=<the alert's env>) FIRST \u2014 per-engine now/peak/trend, sorted worst-first, plus the environment total. The alert says a cluster, not an engine.",
+      "fetch_engine_backlog(environment=<the alert's env>) FIRST — per-engine now/peak/trend, sorted worst-first, plus the environment total. The alert says a cluster, not an engine.",
       "Name the engines that actually have backlog and say which are CLIMBING versus draining or flat. Observed on aiw-prod1001 (2026-08-31): 31 of 36 engines had some backlog, total 1844 tasks, Podcast Adapter flat at 866 while SI2 Playback segment creator was climbing at 197.",
       "capture_backlog_screenshot for the card, so the thread carries the same picture the on-call engineer would open.",
-      "For the engines with real backlog, check whether the tasks are QUEUED or FAILING: list_tasks_by_status(status='failed') on that engine. A backlog of failing tasks will not drain by waiting, and an 'Engine failure rate above 15%' alert on the same cluster is the tell \u2014 resolve that first.",
+      "For the engines with real backlog, check whether the tasks are QUEUED or FAILING: list_tasks_by_status(status='failed') on that engine. A backlog of failing tasks will not drain by waiting, and an 'Engine failure rate above 15%' alert on the same cluster is the tell — resolve that first.",
       "Check pod health for the engine (the Kubernetes specialist's territory, but the alert often arrives alongside KubePodsNotReady on the same cluster).",
       "Identify the submitting org for a bad-job flood, from the task records."
     ],
@@ -204,13 +222,112 @@
     "example_commands": [
       "curl -I <asset-url> (verify 404 on bad-job inputs)"
     ],
-    "_owner_direction": "2026-08-31: this belongs with the engine alerts (same family as 'Engine failure rate above 15%'), NOT with the Grafana metrics alerts. The graphs are in Edge UI \u2014 the Backlog card on https://processing.<env>.aiware.run/processing/jobs/ \u2014 so parse it from there.",
+    "_owner_direction": "2026-08-31: this belongs with the engine alerts (same family as 'Engine failure rate above 15%'), NOT with the Grafana metrics alerts. The graphs are in Edge UI — the Backlog card on https://processing.<env>.aiware.run/processing/jobs/ — so parse it from there.",
     "edge_ui": {
       "_verified": "network-sniffed and called live against aiw-prd5001/aiw-prod1001/aiw-uk1001 on 2026-08-31",
-      "page": "https://processing.<env>.aiware.run/processing/jobs/ \u2014 the card titled 'Backlog'",
+      "page": "https://processing.<env>.aiware.run/processing/jobs/ — the card titled 'Backlog'",
       "api": "GET /edge/v1/proc/jobs/backlog_count_by_engine?startTime=<epoch>&endTime=<epoch> -> {counts: [{engineID, engineName, priority, values: [[epoch_ms, count], ...]}]}. This is the endpoint the card itself draws from.",
       "tools": "fetch_engine_backlog for the numbers (now/peak/trend/priority per engine), capture_backlog_screenshot for the card itself.",
-      "gotcha": "DO NOT try to scrape the card. It is an ApexCharts SVG whose only readable text is the engine-name legend \u2014 a DOM scrape returns a list of engine names and no numbers at all. The card is selected by its `.ant-card-head-title` text, never by its CSS-module class (`TimeSeriesChart_cardChart__9AQva` is build-hashed and changes on every Edge UI deploy)."
+      "gotcha": "DO NOT try to scrape the card. It is an ApexCharts SVG whose only readable text is the engine-name legend — a DOM scrape returns a list of engine names and no numbers at all. The card is selected by its `.ant-card-head-title` text, never by its CSS-module class (`TimeSeriesChart_cardChart__9AQva` is build-hashed and changes on every Edge UI deploy)."
     }
+  },
+  {
+    "fingerprint": "OrgTaskJobFailures/*",
+    "alertname": "Organization task failures above 10 or greater than 50% / Organization job failures above 5 or greater than 50%",
+    "alert_pattern": "[FIRING:N] <env> : Organization task failures above 10 or greater than 50%  |  [FIRING:N] <env> : Organization job failures above 5 or greater than 50%",
+    "environment": "aiw-prod1001, aiw-wpsc01 observed",
+    "occurrences_observed": 4,
+    "typical_resolution_minutes": null,
+    "resolution_time_note": "Neither observed occurrence was fixed by the NOC. Both ended in a handoff - one to the engine owner, one to the customer's CSM - so treat 'diagnosed and escalated' as the finished state, not 'resolved'.",
+    "alert_rule_note": "The alert's own description states the rule verbatim: it fires at 5+ failed jobs (or 10+ failed tasks), OR when over 50% of the org's jobs failed, attributing the failure to the engine that ran the failing task. The description also notes the 50% branch needs `org_stats_org_jobs`, which only exists once the current org_stats.sh has run - quote the alert rather than restating the threshold from memory.",
+    "diagnosis_steps": [
+      "The alert summary already names the org and the engine: 'aiw-wpsc01 - Los Angeles County Sheriff (CA) - Redact Trial: 5 failed jobs on [133] Keep Alive Helper'. Pull the engine name + engine ID and the org name + org ID out of it first - that pair is what every later step is scoped to.",
+      "Put the failures in proportion: failed vs completed for that org/engine over the alert's window. Observed: '19 failed jobs vs 63 completed in the last 6h' and '226 total failed tasks (2% failure rate)'. A large absolute count at a 2% rate is a very different thread from a 30% rate.",
+      "Check whether the engine is also BACKLOGGED - a high backlog alongside failures points at the engine, not at the org's data (observed on Docling Chunk Engine, 2026-09-11).",
+      "Open a failed task and record the Error Type and the raw ETGN error JSON verbatim. This is the evidence that decides who owns it.",
+      "Attach the task log zip from Edge UI, the same as an engine-failure-rate thread.",
+      "Decide from the error code whether this is engine-side or data/source-side (see known_causes below), and escalate to that owner."
+    ],
+    "resolution_steps": [
+      "Engine-side error (internal_error.ETGN888/ETGN668): hand to the engine's owning team with the error JSON and the failed/completed counts.",
+      "Source/data-side error (connection.*, stream or feed failures): hand to the org's CSM or the data-source owner - changing the source URL is often not a durable fix (see gotchas).",
+      "Do not retry or resubmit jobs to make the alert clear; the failure count is historical and retrying hides the cause."
+    ],
+    "gotchas": [
+      "It names an ORG, so it reads like a customer problem - but the attribution is to whichever ENGINE ran the failing task, and the cause is usually the engine or the customer's data source, not the org itself.",
+      "A rotating source URL cannot be fixed by pointing at one of its current values. 2026-09-10, Hubbard Radio: the stream redirected across 5 different dynamic `*.live.streamtheworld.com` hosts on refresh, so pinning any one of them would break again later - that finding is the reason the thread went to the CSM instead of an edit.",
+      "The engine named in brackets ('[133] Keep Alive Helper') is the attribution, not necessarily the faulty component - read the task error before blaming it.",
+      "This alert and 'Engine failure rate above 15%' can fire on the same underlying failure. Check for a sibling engine-failure thread before opening a second investigation of the same error code."
+    ],
+    "escalation": "Engine owning team for internal_error codes; the org's CSM for customer-data and stream-source problems. Both observed threads ended in an @-mention of a named owner, with the evidence already posted.",
+    "known_causes": [
+      {
+        "error_code": "connection.ETGN996 (ffmpegConnectionErr)",
+        "engine": "TV and Radio Adapter V3F",
+        "org": "Hubbard Radio - St. Louis",
+        "cause": "The engine opened the stream URL `http://playerservices.streamtheworld.com/api/livestream-redirect/WXOSFM.MP3`; FFmpeg reported 'Error opening input: Connection timed out' and exited with status 146. The redirect target rotates across at least 5 dynamic hosts.",
+        "status": "handed to the CSM; no durable fix within the thread",
+        "incident_refs": [
+          "#121327"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1789009147290379",
+        "verified": true
+      },
+      {
+        "error_code": "internal_error.ETGN888 / internal_error.ETGN668 (docling_serve.py returned empty array)",
+        "engine": "Docling Chunk Engine",
+        "cause": "engineHeartbeatFailureReport with failureMsg 'docling_serve.py returned empty array - empty or invalid array returned', followed by engineFailedToProcessChunk. 19 failed vs 63 completed jobs in 6h on aiw-wpsc01, alongside a high processing backlog for the same engine.",
+        "status": "escalated to the engine owner; same signature already recorded in this repo's engine-failure-rate case across Jan/Mar/May/Aug 2026, so it is long-running rather than new",
+        "incident_refs": [
+          "#121421"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1789065553530009",
+        "verified": true
+      }
+    ],
+    "_source": "Built 2026-09-11 from two real #comms-noc threads (#121327, #121421) and the alert rule text carried in the #alerts-devops payload of #121461.",
+    "alert_payload": {
+      "_verified": "incidents #121455 (tasks), #121458 and #121461 (jobs), 2026-09-11",
+      "summary_tasks": "<env> - <Org Name>: <N> failed tasks on <Engine Name> in the last <window>",
+      "summary_jobs": "<env> - <Org Name>: <N> failed jobs on <Engine Name>",
+      "description": "Org <Org Name> (<orgId uuid>) had <N> failed tasks/jobs in the last <window> on/attributed to <Engine Name>, then the RULE ITSELF in prose: tasks fire at '10+ failed tasks on one engine, or when over 50% of ALL the org's tasks failed (also needs 10+ failures)'; jobs fire at '5+ failed jobs, or when over 50% of the org's jobs failed'.",
+      "labels": [
+        "env",
+        "namespace",
+        "severity"
+      ],
+      "use_it_for": "The org NAME, the org UUID, the engine NAME, the failure COUNT and the WINDOW are all in the summary/description - every one of them is something the on-call engineer otherwise looks up by hand in Edge UI. Extract them first, then go find the task error. Quote the rule text from the description rather than restating a threshold from memory.",
+      "trap": "When the org has no name the template renders the UUID TWICE - 'Org d5c149f5-... (d5c149f5-...)' (#121458). That is not two ids; do not report it as an org named after a uuid. Also the labels are thin (env/namespace/severity only): unlike other alerts the identifiers live in the SUMMARY and DESCRIPTION, not in the labels.",
+      "_shared": "The parser now hands you these already split out, under 'sub-alerts parsed from state_message', with the FIRING ones listed first. Read them instead of re-reading the raw card. The block is only present while the incident is live — once VictorOps closes it the whole thing is replaced by 'Automatically resolved', and a block can be marked truncated, which means its missing fields are UNKNOWN rather than empty."
+    }
+  },
+  {
+    "fingerprint": "NocHealthCheck/systems-alerting",
+    "alertname": "NOC Health Check - Systems Alerting",
+    "alert_pattern": "[CRITICAL] NOC Health Check - Systems Alerting (monitoring_tool: NOC Automation Script)",
+    "environment": "cross-environment rollup; the body names the specific clusters",
+    "occurrences_observed": 3,
+    "typical_resolution_minutes": null,
+    "resolution_time_note": "It is a recurring 2-hourly rollup, not an incident with an end. Observed re-firing every 2 hours on 2026-09-11 with the same two sections critical and the NSQ backlog still growing (90306 -> 90881 -> 91453 across three consecutive runs).",
+    "structure_note": "THE ALERT BODY IS THE REPORT. Unlike every other alert here it carries its own findings in `state_message`, in fixed sections - 'Cluster Processing Status' listing each cluster with truncated engine IDs and a count, and 'NSQ Backlog Status' listing `<cluster> - <topic> -> <depth>`. Parse those sections rather than going looking for the numbers elsewhere.",
+    "diagnosis_steps": [
+      "Read the sections out of the alert body and state which are CRITICAL. Observed consistently: Cluster Processing Status and NSQ Backlog Status.",
+      "For Cluster Processing Status, the engine IDs are TRUNCATED to 8 hex characters with a count in parentheses (`01e54769... (16)`). Expand the ID against the environment's engines before naming an engine - do not report a truncated ID as if it were the engine.",
+      "One engine dominating one cluster is the shape worth calling out (observed `01e54769... (16)` on aiw-wpsc01 across all three runs, versus single stuck engines elsewhere).",
+      "For NSQ Backlog Status, report the topic, the cluster and the depth, and whether the depth is GROWING across consecutive runs - a static backlog and a climbing one are different problems. Observed: `aiw-zpfc02 - RecordingsTopic-task-insert-server-es7` at 90306, 90881, 91453 over ~4h, i.e. climbing slowly.",
+      "Check for a sibling engine-failure or backlog alert on the same cluster; this rollup usually restates something another alert already fired on."
+    ],
+    "resolution_steps": [
+      "Report the per-section state with the actual numbers and the trend since the previous run, and hand the growing NSQ topic to the owning team.",
+      "Do not treat this as resolved because a later run looks different - it re-fires on its own schedule."
+    ],
+    "gotchas": [
+      "It is ACKed by a human every run (observed ACK_USER khushpatel, adumasia) and then re-fires 2 hours later. Repeating the same text every 2 hours is noise - the trend versus the previous run is the only new information.",
+      "Truncated engine IDs (`68d81fe5...`) are not usable as identifiers as-is.",
+      "The sections vary run to run - aiw-prd5001 listed 4 engines in one run and 6 in the next - so re-read the body every time instead of reusing the last finding."
+    ],
+    "escalation": "The team owning the backlogged NSQ topic; the engine team for a cluster whose engine list keeps growing.",
+    "example_commands": [],
+    "_source": "Built 2026-09-11 from three consecutive #alerts-devops payloads (incidents #121462, #121470, #121478)."
   }
 ]

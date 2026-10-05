@@ -6,6 +6,8 @@ Fire an alert at the agent without needing read access to Slack.
     python py/scripts/replay_alert.py --incident "<alert line>" --dry-run
     python py/scripts/replay_alert.py --list
     python py/scripts/replay_alert.py --fixture "pvc"
+    python py/scripts/replay_alert.py --payload alert.txt --dry-run   # a REAL pasted card
+    pbpaste | python py/scripts/replay_alert.py --payload - --dry-run
 
 By default this DOES post: the alert card goes into the channel, the agent
 investigates, and its findings + Grafana screenshots are posted as replies in
@@ -59,10 +61,24 @@ from oncall_agent.handler import SeenStore, handle_alert
 from oncall_agent.listener import _log
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "alerts-devops-real.json"
+# The 2026-09 cards, whose state_message carries Summary/Description/Labels.
+_FIXTURES_STATE = _FIXTURES.parent / "alerts-devops-state-message.json"
 
 
 def load_fixtures() -> list:
-    return json.loads(_FIXTURES.read_text())["messages"]
+    """Both fixture sets: the 2026-08 cards and the 2026-09 state_message ones.
+
+    They are separate files because they are different PAYLOAD SHAPES, not just
+    different alerts. The Alertmanager -> VictorOps template gained a
+    per-sub-alert Summary/Description/Labels block between them, so the older
+    set carries "state_message: *Alertmanager:* <url>" and nothing more. Both
+    still arrive in production (a closed incident has its block replaced), so
+    both have to keep parsing.
+    """
+    messages = list(json.loads(_FIXTURES.read_text())["messages"])
+    if _FIXTURES_STATE.exists():
+        messages += json.loads(_FIXTURES_STATE.read_text())
+    return messages
 
 
 def pick_fixture(needle: str) -> dict:
@@ -75,7 +91,31 @@ def pick_fixture(needle: str) -> dict:
     return matches[0]
 
 
-def synthesize(incident_line: str, number: int, org: str = "wazee-digital-inc") -> dict:
+def _sub_alert_block(summary: str, description: str, labels: str, status: str) -> str:
+    """A realistic state_message block for --incident.
+
+    Without this, --incident synthesizes the PRE-2026-09 shape
+    ("state_message: *Alertmanager:* <url>"), so a replay exercises a payload
+    production no longer sends and the sub-alert path is never tested. The
+    bullet is written HTML-escaped, as the real transmitter sends it.
+    """
+    lines = [f"&bull; *[{status.upper()}] alert*"]
+    if summary:
+        lines.append(f"  *Summary:* {summary}")
+    if description:
+        lines.append(f"  *Description:* {description}")
+    if labels:
+        lines.append("  *Labels:*")
+        for pair in labels.split(","):
+            key, _, value = pair.partition("=")
+            if key.strip():
+                lines.append(f"    - {key.strip()}: {value.strip()}")
+    lines.append("  *Started:* 2026-09-11 10:19:47 UTC")
+    return "\n".join(lines)
+
+
+def synthesize(incident_line: str, number: int, org: str = "wazee-digital-inc",
+               state_message: str = "") -> dict:
     """Build a VictorOps card around an arbitrary alert line.
 
     Mirrors the real payload shape exactly (see fixtures/alerts-devops-real.json):
@@ -95,7 +135,7 @@ def synthesize(incident_line: str, number: int, org: str = "wazee-digital-inc") 
                 f"{incident_line}\n"
                 f"```monitoring_tool: Alertmanager\n"
                 f"entity_display_name: {incident_line}\n"
-                f"state_message: *Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>\n"
+                f"state_message: {state_message or '*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>'}\n"
                 f"CONTACTGROUPNAME: devops-oncall\n"
                 f"CURRENT_ALERT_PHASE: FIRING\n"
                 f"CURRENT_STATE: CRITICAL\n"
@@ -138,7 +178,26 @@ def main() -> int:
                         help="replay a real captured alert (substring of its _case)")
     source.add_argument("--incident", metavar="LINE",
                         help='synthesize a card, e.g. "[FIRING:1] aiw-prd5001 : Engine failure rate above 15%%"')
+    # The one that takes a REAL alert whole. --fixture replays a card someone
+    # captured earlier and --incident synthesizes one around a title; neither
+    # helps when you have the actual alert in front of you and want to run THAT.
+    # Paste it into a file (or pipe it on stdin with "-") and it is used byte
+    # for byte: no title parsing, no reconstruction, every sub-alert intact.
+    source.add_argument("--payload", metavar="FILE",
+                        help='replay a whole pasted alert card from a file, verbatim '
+                             '("-" reads stdin). Use this for a real alert you have in hand.')
     parser.add_argument("--list", action="store_true", help="list available fixtures and exit")
+    # The card's own Summary/Description/Labels. Production sends these on
+    # every live Alertmanager incident; the agent now parses them into
+    # sub-alerts and the specialists are told to read them before reaching for
+    # a tool, so a replay without them tests the wrong shape.
+    parser.add_argument("--summary", default="", help="*Summary:* line for --incident")
+    parser.add_argument("--description", default="", help="*Description:* line for --incident")
+    parser.add_argument("--labels-kv", default="", metavar="K=V,K=V",
+                        help="named *Labels:* for --incident, e.g. "
+                             "'node=ip-10-0-41-41.ec2.internal,zone=us-east-1a'")
+    parser.add_argument("--sub-alert-status", default="FIRING", choices=("FIRING", "RESOLVED"),
+                        help="status of the synthesized sub-alert (default FIRING)")
     # Unique per run: the audit record is written to .state/audit/<number>.json,
     # so a fixed default meant two terminals overwrote each other's record.
     parser.add_argument("--number", type=int, default=990000 + (os.getpid() % 9000),
@@ -164,10 +223,26 @@ def main() -> int:
         for m in load_fixtures():
             print(f"  {m['_case']}")
         return 0
-    if not (args.fixture or args.incident):
+    if not (args.fixture or args.incident or args.payload):
         parser.error("pass --fixture, --incident, or --list")
 
-    message = pick_fixture(args.fixture) if args.fixture else synthesize(args.incident, args.number)
+    if args.payload:
+        raw = sys.stdin.read() if args.payload == "-" else Path(args.payload).read_text()
+        if not raw.strip():
+            raise SystemExit("--payload was empty — nothing to replay")
+        # No wrapping and no cleanup. A pasted card is already the payload, and
+        # the parser is built to cope with what a paste loses (the ``` fence,
+        # the portal link, the trailing VictorOps metadata).
+        message = {"ts": f"{time.time():.6f}", "bot_id": "BCT64JZ16",
+                   "text": raw, "attachments": []}
+    elif args.fixture:
+        message = pick_fixture(args.fixture)
+    else:
+        block = ""
+        if args.summary or args.description or args.labels_kv:
+            block = _sub_alert_block(args.summary, args.description, args.labels_kv,
+                                     args.sub_alert_status)
+        message = synthesize(args.incident, args.number, state_message=block)
 
     config = load_config()
     post_alert = not args.dry_run and not args.no_post

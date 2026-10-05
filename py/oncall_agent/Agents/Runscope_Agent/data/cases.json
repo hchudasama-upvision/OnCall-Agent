@@ -1,10 +1,10 @@
 [
   {
     "fingerprint": "TrackJob-Runscope/*",
-    "alertname": "Track Job (Runscope API monitor)",
-    "alert_pattern": "Incident: AWS US (us-1) - Track Job / AWS SLED (us-gov-1) - Track Job (monitoring_tool: Runscope)",
+    "alertname": "Track Job / Essentials (Runscope API monitors)",
+    "alert_pattern": "Incident: AWS US (us-1) - Track Job / AWS SLED (us-gov-1) - Track Job / Essentials - UK Prod (monitoring_tool: Runscope)",
     "environment": "synthetic API monitors per environment",
-    "occurrences_observed": 4,
+    "occurrences_observed": 5,
     "typical_resolution_minutes": 20,
     "diagnosis_steps": [
       "Check the failing assertion in the Runscope test result (observed: \"Status '500' was not a number equal to 200\")",
@@ -17,9 +17,15 @@
     ],
     "gotchas": [
       "Single-run Runscope failures are noisy; two consecutive failures or a failing manual test is the real signal",
-      "The same alert on multiple envs simultaneously suggests a shared dependency, not coincidence"
+      "The same alert on multiple envs simultaneously suggests a shared dependency, not coincidence",
+      "The incident title is the MONITOR name and carries no alertname-shaped token - 'Essentials - UK Prod' (#121460, 2026-09-11) splits into nothing useful on ' - '. Match on monitoring_tool: Runscope and on the ENTITY_ID, which spells it out: \"Runscope 'Essentials - UK Prod' Test Settings (EU1)\", including the region bucket the test ran from.",
+      "state_message names the environment even when the title does not: 'aiWARE - AWS UK (uk-1):Essentials - UK Prod has failed.' Take the environment from there rather than from the title."
     ],
     "escalation": "None for transient; API on-call for confirmed failures",
-    "example_commands": []
+    "example_commands": [],
+    "monitors_seen": [
+      "Track Job",
+      "Essentials - UK Prod"
+    ]
   }
 ]

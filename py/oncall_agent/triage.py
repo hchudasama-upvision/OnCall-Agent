@@ -168,6 +168,12 @@ def triage(
         alert_text, past_cases, history, recent_changes, observations))
 
 
+# A NodeHighCPUUsage card can carry 9 sub-alerts and a KubePodsNotReady card
+# 230. They repeat the same shape, so the prompt gets a bounded sample plus the
+# real counts rather than a payload that crowds out the case library.
+_MAX_SUB_ALERTS = 8
+
+
 def alert_prompt_text(alert: ParsedAlert) -> str:
     """The ALERT input: the raw payload plus what the parser pulled out of it.
 
@@ -188,4 +194,27 @@ def alert_prompt_text(alert: ParsedAlert) -> str:
         "firing_count": alert.firing_count or None,
     }
     parsed = {k: v for k, v in parsed.items() if v is not None}
-    return f"{alert.raw_text}\n\n---\nparsed fields: {json.dumps(parsed, indent=2)}"
+
+    # The sub-alerts, as STRUCTURE rather than as a blob inside raw_text. The
+    # card's state_message carries one block per sub-alert with the label
+    # NAMES spelled out — `node`, `pod`, `dbinstance_identifier`,
+    # `load_balancer`, `engineName` — which is what turns "investigate this
+    # alert" into "investigate THIS resource". Firing ones are listed first
+    # and labelled, because a card routinely mixes firing and resolved and the
+    # resolved ones are rendered at the top.
+    blocks = ""
+    if alert.sub_alerts:
+        firing = alert.firing_sub_alerts
+        ordered = firing + [s for s in alert.sub_alerts if s not in firing]
+        parsed["sub_alert_count"] = len(alert.sub_alerts)
+        parsed["firing_sub_alert_count"] = len(firing)
+        shown = ordered[:_MAX_SUB_ALERTS]
+        blocks = ("\n\n---\nsub-alerts parsed from state_message "
+                  f"({len(firing)} firing of {len(alert.sub_alerts)}"
+                  + (f", showing {len(shown)}" if len(shown) < len(alert.sub_alerts) else "")
+                  + "):\n" + json.dumps(shown, indent=2))
+        if any(s.get("truncated") for s in shown):
+            blocks += ("\n\nNOTE: a block is marked truncated — VictorOps cut the card off "
+                       "mid-block. Its missing fields are UNKNOWN, not empty; do not fill them in.")
+    return (f"{alert.raw_text}\n\n---\nparsed fields: {json.dumps(parsed, indent=2)}"
+            f"{blocks}")

@@ -26,6 +26,7 @@ from ...Windows_Agent import server as windows_server
 from ...shared_prompt import (
     BACKTICK_VALUES,
     CONFIRMED_ONLY,
+    READ_THE_ALERT_FIRST,
     EVIDENCE_ECONOMY,
     GUARDRAILS,
     LINKING_RULE,
@@ -134,6 +135,8 @@ VARIABLE DISCIPLINE — this is where these alerts actually go wrong:
   way the channel does: percentage AND absolute free space ("90%, 30GB free of 300GB").
   A level without a trend is half an answer: say whether it is climbing, flat, or
   already released.
+
+{READ_THE_ALERT_FIRST}
 
 {CONFIRMED_ONLY}
 

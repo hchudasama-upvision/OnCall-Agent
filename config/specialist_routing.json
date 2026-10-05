@@ -11,7 +11,8 @@
     "no domain tool) rather than a wrong guess.",
     "",
     "Editable without touching code, same spirit as data/cases.json and",
-    "config/panel_map.json \u2014 add a keyword here as new alert types are learned."
+    "config/panel_map.json — add a keyword here as new alert types are learned.",
+    "2026-09-11: keywords below the original set were added from a scan of the real #alerts-devops and #comms-noc history. NodeHighCPUUsage was the single most frequent VictorOps pager in that window and had no route at all. 'IS DOWN' is deliberately broad but only matches the Zabbix/PandoLogic titles ('10.60.4.178 IPrediction IS DOWN'); it is last in its list so a more specific route still wins."
   ],
   "routes": [
     {
@@ -19,7 +20,11 @@
       "keywords": [
         "Engine backlog",
         "EngineBacklog",
-        "engine backlog critical"
+        "engine backlog critical",
+        "Organization task failures",
+        "Organization job failures",
+        "NOC Health Check",
+        "Systems Alerting"
       ]
     },
     {
@@ -51,7 +56,10 @@
         "KubePodNotReady",
         "KubePersistentVolumeFilling",
         "KubeHpaMaxedOut",
-        "KubeDeployment"
+        "KubeDeployment",
+        "NodeHighCPUUsage",
+        "NodeHighMemoryUsage",
+        "ArgoCD"
       ]
     },
     {
@@ -62,7 +70,8 @@
         "SOLR Asset Reindex",
         "Public Stream",
         "CNBC",
-        "Runscope"
+        "Runscope",
+        "Essentials - UK Prod"
       ]
     },
     {
@@ -88,7 +97,13 @@
         "nodejs_active_handles",
         "HostCPUUtilization",
         "HostMemoryUtilization",
-        "HostOutOfMemory"
+        "HostOutOfMemory",
+        "TLSCertificateExpiry",
+        "IIS:",
+        "Application pool",
+        "WCF Service Not In Running State",
+        "Please call - Team B",
+        "IS DOWN"
       ]
     }
   ]

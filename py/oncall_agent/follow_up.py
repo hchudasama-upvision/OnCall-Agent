@@ -302,6 +302,20 @@ def _rds_instance_for(alert, log: Callable[[str], None]) -> str:
     override = os.environ.get("FOLLOW_UP_RDS_INSTANCE", "").strip()
     if override:
         return override
+
+    # The card NAMES the database. Since 2026-09-11 the Alertmanager cards
+    # carry a state_message block whose labels are spelled out, and RDS alerts
+    # put the instance in `dbinstance_identifier` — verified on incident
+    # #121453, "dbinstance_identifier: stage-media-rds2". A named label is not
+    # a guess, so it wins outright and the word-scoring below never runs.
+    # It also needs no AWS call, so the re-check can still be armed when the
+    # operator's SSO session has expired at arm time — which is exactly when
+    # the old path returned "" and silently scheduled nothing.
+    named = (alert.label_hints or {}).get("dbinstance_identifier", "").strip()
+    if named:
+        log(f"RDS instance {named} taken from the alert's own dbinstance_identifier label")
+        return named
+
     try:
         instances = [i.get("DBInstanceIdentifier", "") for i in aws_client.list_db_instances()]
     except Exception as e:                              # noqa: BLE001

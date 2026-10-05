@@ -18,6 +18,7 @@ from ..Jira_Agent import server as jira_server
 from ..shared_prompt import (
     BACKTICK_VALUES,
     CONFIRMED_ONLY,
+    READ_THE_ALERT_FIRST,
     EVIDENCE_ECONOMY,
     GUARDRAILS,
     LINKING_RULE,
@@ -128,6 +129,8 @@ and no tool here could.
    the same time is a known pattern, not a new incident.
 
 {_RDS_FORMAT}
+
+{READ_THE_ALERT_FIRST}
 
 {CONFIRMED_ONLY}
 

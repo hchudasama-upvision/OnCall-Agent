@@ -99,6 +99,23 @@ class ParsedAlert:
     labels: List[str] = field(default_factory=list)
     label_hints: Dict[str, str] = field(default_factory=dict)
     fields: Dict[str, str] = field(default_factory=dict)
+    # One entry per sub-alert in the card's state_message: status, alertname,
+    # summary, description, runbook, started/resolved and the NAMED labels.
+    # Empty for the shapes that carry no such block (Zabbix, Runscope, the NOC
+    # health check, and any incident VictorOps has already closed — it replaces
+    # the whole block with "Automatically resolved"). See
+    # alert_parser.parse_state_message for the format and its traps.
+    sub_alerts: List[Dict[str, object]] = field(default_factory=list)
+
+    @property
+    def firing_sub_alerts(self) -> List[Dict[str, object]]:
+        """Only the sub-alerts still FIRING — the ones that need an answer.
+
+        A card routinely mixes both ("[FIRING:1 RESOLVED:2]"), and reporting a
+        node that recovered 40 minutes ago as if it were the problem is the
+        exact drift this split exists to prevent.
+        """
+        return [s for s in self.sub_alerts if str(s.get("status", "")).upper() == "FIRING"]
 
     @property
     def is_resolved(self) -> bool:

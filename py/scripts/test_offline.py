@@ -146,6 +146,347 @@ def test_parser() -> None:
           incident.slack_permalink == engine.incident_url)
 
 
+# ------------------------------------------------- state_message sub-alerts
+
+# Verbatim from #alerts-devops on 2026-09-11, as the Slack connector returned
+# them. Every assertion below is something the parser got wrong before the
+# block was parsed at all.
+_CARD_NODE_CPU = """*Organization:* wazee-digital-inc
+*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121477|Incident #121477>: [FIRING:9] aiw-prod1001 : NodeHighCPUUsage*
+[FIRING:9] aiw-prod1001 : NodeHighCPUUsage
+```monitoring_tool: Alertmanager
+entity_display_name: [FIRING:9] aiw-prod1001 : NodeHighCPUUsage
+state_message: &bull; *[RESOLVED] NodeHighCPUUsage*
+  *Summary:* High CPU: engine_segregated node in aiw-prod1001 (us-east-1c)
+  *Description:* Node ip-10-0-100-23.ec2.internal [engine_segregated, us-east-1c] in cluster aiw-prod1001 has CPU above 90% for 15+ minutes. VALUE = 96.18883101851006
+  *Labels:*
+    - env: aiw-prod1001
+    - instance: 10.0.100.23:9100
+    - node: ip-10-0-100-23.ec2.internal
+    - server_type: engine_segregated
+    - severity: critical
+    - zone: us-east-1c
+  *Started:* 2026-09-11 10:19:47 UTC
+  *Resolved:* 2026-09-11 10:31:47 UTC
+&bull; *[FIRING] NodeHighCPUUsage*
+  *Summary:* High CPU: engine_segregated node in aiw-prod1001 (us-east-1a)
+  *Description:* Node ip-10-0-41-41.ec2.internal [engine_segregated, us-east-1a] in cluster aiw-prod1001 has CPU above 90% for 15+ minutes. VALUE = 92.73020833331464
+  *Labels:*
+    - env: aiw-prod1001
+    - instance: 10.0.41.41:9100
+    - node: ip-10-0-41-41.ec2.internal
+    - server_type: engine_segregated
+    - severity: critical
+    - zone: us-east-1a
+  *Started:* 2026-09-11 07:47:47 UTC
+*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>
+CURRENT_ALERT_PHASE: ACKED
+INCIDENT_NAME: 121477
+SERVICE: [FIRING:9] aiw-prod1001 : NodeHighCPUUsage
+```"""
+
+_CARD_RDS = """*Organization:* wazee-digital-inc
+*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121453|Incident #121453>: [FIRING:1] us-1 : stage - RDS_CPUUtilizationAvgCriticalMedia*
+[FIRING:1] us-1 : stage - RDS_CPUUtilizationAvgCriticalMedia
+```monitoring_tool: Alertmanager
+state_message: &bull; *[FIRING] stage - RDS_CPUUtilizationAvgCriticalMedia*
+  *Summary:* Postgres average CPU utilization has reached 50 for at least 10m
+  *Description:* Postgres stage-media-rds2 average CPU utilization has reached 50 for at least 10m
+  *Labels:*
+    - dbinstance_identifier: stage-media-rds2
+    - env: us-1
+    - job: cloudwatch_exporter
+    - severity: critical
+  *Started:* 2026-09-10 02:34:47 UTC
+*Alertmanager:* <http://thanos-alertmanager.ops.veritone.com>
+INCIDENT_NAME: 121453
+```"""
+
+# VictorOps replaces the whole block with this once the incident closes.
+_CARD_AUTORESOLVED = """*Organization:* wazee-digital-inc
+*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121450|Incident #121450>: [FIRING:230 RESOLVED:5] aiw-prod1001 : KubePodsNotReady*
+```monitoring_tool: Alertmanager
+state_message: Automatically resolved
+CURRENT_ALERT_PHASE: RESOLVED
+INCIDENT_NAME: 121450
+```"""
+
+# The card is cut off mid-block when it carries many sub-alerts.
+_CARD_TRUNCATED = """*<https://portal.victorops.com/ui/wazee-digital-inc/incident/121459|Incident #121459>: [FIRING:32] ops-prom : EndpointDown*
+```monitoring_tool: Alertmanager
+state_message: &bull; *[FIRING] EndpointDown*
+  *Summary:* Endpoint Down: <https://jenkins.us-1.veritone.com>
+  *Description:* The endpoint <https://jenkins.us-1.veritone.com> in environment Z04938931Y28CFARQSX47 is returning status CONNECTION_ERROR but expected 403.
+  *Labels:*
+    - env: ops-prom
+    - expected_status_code: 403
+    - status: CONNECTION_ERROR
+    - url: <https://jenkins.us-1.veritone.com>
+  *Started:* 2026-09-11 05:21:47 UTC
+&bull; *[FIRING] EndpointDown*
+  *Summary:* Endpoint Down: <https://jenkins.veritone.com>
+  *Labels:*"""
+
+
+def test_mixed_status_prefix() -> None:
+    group("mixed [FIRING:n RESOLVED:m] prefix")
+    from oncall_agent.alert_parser import parse_alert_message
+
+    # The normal state of KubePodsNotReady / NodeHighCPUUsage / org-failure
+    # cards. The original _FIRING required "]" straight after the digits, so
+    # every one of these parsed as firing_count 0 with the WHOLE line as the
+    # alertname — which reached the thread heading and the memory key.
+    for line, count, name in (
+        ("[FIRING:16 RESOLVED:5] aiw-uk1001 : KubePodsNotReady", 16, "KubePodsNotReady"),
+        ("[FIRING:1 RESOLVED:2] aiw-prod1001 : NodeHighCPUUsage", 1, "NodeHighCPUUsage"),
+        ("[FIRING:8 RESOLVED:1] aiw-prod1001 : Organization task failures above 10 or greater than 50%",
+         8, "Organization task failures above 10 or greater than 50%"),
+        # ...and the shapes that already worked must not regress.
+        ("[FIRING:9] aiw-prod1001 : NodeHighCPUUsage", 9, "NodeHighCPUUsage"),
+        ("[CRITICAL] NOC Health Check - Systems Alerting", 0, "NOC Health Check - Systems Alerting"),
+        ("[FIRING:1] us-1 - prod - AlbUnhealthyHostWarning", 1, "AlbUnhealthyHostWarning"),
+    ):
+        alert = parse_alert_message({"text": line, "ts": "1.0"})
+        check(f"firing_count {count} from {line[:34]!r}", alert.firing_count == count,
+              str(alert.firing_count))
+        check(f"alertname {name[:30]!r}", alert.alert_name == name, repr(alert.alert_name))
+
+
+# A card PASTED as plain text, exactly as the owner supplies one (2026-09-12).
+# It differs from the Slack card in four ways, all of them load-bearing: no
+# *Organization:* line, the heading is plain "Incident #N: <title>" with no
+# portal link, the ``` fence is gone so `monitoring_tool` is GLUED to the end
+# of the title line, and the trailing VictorOps metadata is trimmed off.
+_PASTED_CARD = """Incident #121608: [FIRING:1] aiw-wpsc01 : Engine failure rate above 15%
+[FIRING:1] aiw-wpsc01 : Engine failure rate above 15%monitoring_tool: Alertmanager
+entity_display_name: [FIRING:1] aiw-wpsc01 : Engine failure rate above 15%
+state_message: &bull; *[FIRING] Engine failure rate above 15%*
+  *Summary:* aiw-wpsc01 - Engine: AWS Rekognition - Unsafe Content (US East) V3 has failure rate above 15% over last 15 minutes.
+  *Description:* Environment: aiw-wpsc01 has a high engine failure rate (value: 91.67%) for Engine: AWS Rekognition - Unsafe Content (US East) V3 over last 15 minutes.
+  *Runbook:* https://veritone.atlassian.net/wiki/spaces/DEV/pages/3387588703/Runbook+Engine+failure+rate+over+15
+  *Labels:*
+    - engineName: AWS Rekognition - Unsafe Content (US East) V3
+    - env: aiw-wpsc01
+    - namespace: central-monitoring
+    - severity: critical
+  *Started:* 2026-09-12 06:50:57 UTC"""
+
+
+def test_replay_payload_flag() -> None:
+    group("replay_alert --payload (a whole card, pasted)")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "replay_alert", Path(__file__).resolve().parent / "replay_alert.py")
+    replay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(replay)
+
+    # --payload is used verbatim: no card is synthesized around it, so nothing
+    # the paste already contains gets duplicated or reformatted.
+    from oncall_agent.alert_parser import parse_alert_message
+    alert = parse_alert_message({"text": _PASTED_CARD, "ts": "1.0"})
+    check("a pasted card needs no synthesize() wrapper",
+          alert.incident_number == 121608 and len(alert.sub_alerts) == 1,
+          f"{alert.incident_number} / {len(alert.sub_alerts)}")
+
+    # --list must still resolve fixtures from BOTH fixture files.
+    cases = [m["_case"] for m in replay.load_fixtures()]
+    check("fixtures from both files are listed",
+          any("state_message" not in c for c in cases) and
+          any("dbinstance_identifier" in c for c in cases), str(len(cases)))
+
+
+def test_inventory_gaps() -> None:
+    group("inventory_gaps (the daily-update skill's deterministic half)")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "inventory_gaps", Path(__file__).resolve().parent / "inventory_gaps.py")
+    gaps = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gaps)
+
+    # The connector's own dump format, verbatim — this is what the skill saves.
+    dump = (
+        "Channel: #alerts-devops (C909ZH4ET)\n\n"
+        "=== Message from VictorOps (BCT64JZ16) at 2026-09-11 15:49:24 IST ===\n"
+        "Message TS: 1789121964.747289\n\n"
+        "Attachment: " + _CARD_NODE_CPU + "\n\n"
+        "=== Message from VictorOps (BCT64JZ16) at 2026-09-11 08:35:24 IST ===\n"
+        "Message TS: 1789095924.534489\n\n"
+        "Attachment: " + _CARD_RDS + "\n"
+    )
+    messages = gaps._split_connector_dump(dump)
+    check("connector dump splits into messages", len(messages) == 2, str(len(messages)))
+    check("the 'Attachment:' label is stripped, card kept",
+          messages[0]["text"].startswith("*Organization:*"), messages[0]["text"][:40])
+    check("message ts carried through", messages[1]["ts"] == "1789095924.534489",
+          messages[1]["ts"])
+
+    result = gaps.analyse(messages)
+    by_name = {f["alert_name"]: f for f in result["alert_types"]}
+    check("both alert types recognised", len(by_name) == 2, str(sorted(by_name)))
+
+    node = by_name.get("NodeHighCPUUsage", {})
+    check("routed to its specialist", node.get("specialist") == "kubernetes",
+          str(node.get("specialist")))
+    check("matched to its case", node.get("case") == "NodeHighCPUUsage/aiware-clusters",
+          str(node.get("case")))
+    check("observed labels collected from the payload",
+          "server_type" in node.get("observed_labels", []), str(node.get("observed_labels")))
+    check("a fully documented type raises no issue", node.get("issues") == [],
+          str(node.get("issues")))
+
+    # An undocumented label has to surface, or the skill silently falls behind.
+    stripped = dict(node)
+    import json as _json
+    cases_path = _ROOT / gaps.CASE_FILES["kubernetes"]
+    original = cases_path.read_text()
+    try:
+        data = _json.loads(original)
+        for case in data:
+            if case["fingerprint"] == "NodeHighCPUUsage/aiware-clusters":
+                case["alert_payload"]["labels"] = ["env"]      # pretend we only knew one
+        cases_path.write_text(_json.dumps(data, indent=2))
+        again = gaps.analyse(messages)
+        node2 = {f["alert_name"]: f for f in again["alert_types"]}["NodeHighCPUUsage"]
+        check("undocumented labels are reported",
+              any("UNDOCUMENTED LABELS" in i for i in node2["issues"]), str(node2["issues"]))
+        check("...and they name the actual missing labels",
+              "node" in node2["undocumented_labels"], str(node2["undocumented_labels"]))
+    finally:
+        cases_path.write_text(original)
+
+    # #comms-noc: find the threads worth reading, don't judge them here.
+    comms = gaps.analyse_comms(
+        "=== Message from Khush Patel at 2026-09-11 12:12:04 IST ===\n"
+        "Message TS: 1789108924.522309\n\n"
+        "*Alert:*\n> *<https://portal.victorops.com/ui/x/incident/121463|Incident #121463>: "
+        "[FIRING:1] aiw-prod1001 : NodeHighCPUUsage*\nThread: 3 replies\n")
+    check("comms thread found with its incident and reply count",
+          comms and comms[0]["incident"] == 121463 and comms[0]["replies"] == 3, str(comms))
+
+
+def test_pasted_card() -> None:
+    group("card pasted as plain text (no fence, no portal link)")
+    from oncall_agent.alert_parser import parse_alert_message
+
+    alert = parse_alert_message({"text": _PASTED_CARD, "ts": "1.0"})
+    check("incident number off the plain-text heading", alert.incident_number == 121608,
+          str(alert.incident_number))
+    check("alertname", alert.alert_name == "Engine failure rate above 15%", repr(alert.alert_name))
+    check("environment", alert.environment_key == "aiw-wpsc01", alert.environment_key)
+    # Glued to "15%" because the paste lost the ``` fence the real card has.
+    check("glued monitoring_tool recovered", alert.monitoring_tool == "Alertmanager",
+          repr(alert.monitoring_tool))
+    check("one FIRING sub-alert", len(alert.firing_sub_alerts) == 1, str(len(alert.sub_alerts)))
+
+    sub = alert.sub_alerts[0]
+    check("engine name from the named label",
+          sub["labels"].get("engineName") == "AWS Rekognition - Unsafe Content (US East) V3",
+          sub["labels"].get("engineName", ""))
+    # The engine name contains " - " and parentheses; neither may split it.
+    check("engine name with ' - ' and '(...)' survives intact",
+          alert.label_hints.get("engineName", "").endswith("(US East) V3"),
+          alert.label_hints.get("engineName", ""))
+    check("failure value kept", "91.67%" in sub["description"], sub["description"][:60])
+    # Bare URL here; the Slack card wraps it as <...>.
+    check("bare Runbook URL captured",
+          sub["runbook"].startswith("https://veritone.atlassian.net/wiki/"), sub["runbook"][:50])
+    check("started captured", sub["started"] == "2026-09-12 06:50:57 UTC", sub["started"])
+    # No portal link in a paste — the top-level post must not invent one.
+    check("no incident_url is fabricated from a paste", alert.incident_url == "",
+          repr(alert.incident_url))
+    # The paste keeps "Incident #121608: " on its first line, and
+    # compose_top_level_text adds its OWN reference — so leaving it in printed
+    # the number twice in the #comms-noc header.
+    from oncall_agent.handler import to_victorops_incident
+    from oncall_agent.slack_post import compose_top_level_text
+    header = compose_top_level_text(to_victorops_incident(alert))
+    check("header names the incident exactly once", header.count("Incident #121608") == 1, header)
+    check("header falls back to plain text when there is no portal link",
+          "<" not in header and header.startswith("Alert:\n> *Incident #121608:"), header)
+
+
+def test_state_message_sub_alerts() -> None:
+    group("state_message sub-alerts (Summary / Description / named Labels)")
+    from oncall_agent.alert_parser import parse_alert_message, parse_state_message
+
+    node = parse_alert_message({"text": _CARD_NODE_CPU, "ts": "1.0"})
+    check("two sub-alerts parsed", len(node.sub_alerts) == 2, f"got {len(node.sub_alerts)}")
+    check("only the firing one counts as firing", len(node.firing_sub_alerts) == 1,
+          f"got {len(node.firing_sub_alerts)}")
+    # The bullet is HTML-escaped as "&bull;" in the real payload, never "•".
+    check("escaped &bull; splits the blocks",
+          [s["status"] for s in node.sub_alerts] == ["RESOLVED", "FIRING"],
+          str([s["status"] for s in node.sub_alerts]))
+    check("summary captured", node.sub_alerts[1]["summary"].startswith("High CPU:"),
+          node.sub_alerts[1]["summary"])
+    check("description keeps the VALUE",
+          "VALUE = 92.73020833331464" in node.sub_alerts[1]["description"],
+          node.sub_alerts[1]["description"][-40:])
+    check("started/resolved captured",
+          node.sub_alerts[0]["resolved"] == "2026-09-11 10:31:47 UTC"
+          and node.sub_alerts[1]["resolved"] == "",
+          f"{node.sub_alerts[0]['resolved']!r} / {node.sub_alerts[1]['resolved']!r}")
+
+    # The bug this whole block exists to fix: the hint must name the node that
+    # is STILL FIRING, not the one VictorOps renders first (which recovered).
+    check("named label hint prefers the FIRING sub-alert",
+          node.label_hints.get("node") == "ip-10-0-41-41.ec2.internal",
+          node.label_hints.get("node", "<missing>"))
+    check("zone comes from the same sub-alert as the node",
+          node.label_hints.get("zone") == "us-east-1a", node.label_hints.get("zone", ""))
+    # extract_labels() used to read the Summary's own "(us-east-1c)" as an
+    # Alertmanager label value.
+    check("summary parentheses are not read as positional labels",
+          "us-east-1c" not in node.labels and "us-east-1a" not in node.labels,
+          str(node.labels))
+    # _extract_fields is line-based, so state_message held only the first line.
+    check("state_message carries the whole block, not one line",
+          "dbinstance" not in node.state_message and "*Labels:*" in node.state_message
+          and len(node.state_message) > 400, f"{len(node.state_message)} chars")
+
+    rds = parse_alert_message({"text": _CARD_RDS, "ts": "1.0"})
+    # The AWS agent's resolver guesses the instance from the alertname; the
+    # payload names it outright.
+    check("RDS instance comes from dbinstance_identifier, not a guess",
+          rds.label_hints.get("dbinstance_identifier") == "stage-media-rds2",
+          rds.label_hints.get("dbinstance_identifier", "<missing>"))
+    check("RDS description names the same instance",
+          "stage-media-rds2" in rds.sub_alerts[0]["description"], "")
+
+    closed = parse_alert_message({"text": _CARD_AUTORESOLVED, "ts": "1.0"})
+    check("'Automatically resolved' yields no sub-alerts, not a crash",
+          closed.sub_alerts == [], str(closed.sub_alerts))
+    check("...and still parses the rest of the card",
+          closed.incident_number == 121450, str(closed.incident_number))
+
+    cut = parse_alert_message({"text": _CARD_TRUNCATED, "ts": "1.0"})
+    check("truncated tail block is kept", len(cut.sub_alerts) == 2, str(len(cut.sub_alerts)))
+    check("truncated tail is FLAGGED rather than silently empty",
+          cut.sub_alerts[1]["truncated"] is True, str(cut.sub_alerts[1]))
+    # A hand-pasted card ends wherever the person stopped copying, so the last
+    # block can have a COMPLETE label list and still be missing *Started:*.
+    # Every complete block carries Started, so that absence is the tell.
+    tail = parse_alert_message({"text": _CARD_NODE_CPU.replace(
+        "  *Started:* 2026-09-11 07:47:47 UTC\n", ""), "ts": "1.0"})
+    check("a block with full labels but no Started is flagged truncated",
+          tail.sub_alerts[1]["truncated"] is True and
+          tail.sub_alerts[1]["labels"].get("node") == "ip-10-0-41-41.ec2.internal",
+          str(tail.sub_alerts[1]))
+    check("the complete block before it still parses",
+          cut.sub_alerts[0]["labels"].get("status") == "CONNECTION_ERROR"
+          and cut.sub_alerts[0]["truncated"] is False, str(cut.sub_alerts[0]["labels"]))
+    # A URL inside a label must survive exactly, or the fabrication check
+    # rejects the model for citing what the payload actually said.
+    check("url label unlinked to its bare form",
+          cut.sub_alerts[0]["labels"].get("url") == "https://jenkins.us-1.veritone.com",
+          cut.sub_alerts[0]["labels"].get("url", ""))
+
+    # Shapes with no block at all must be untouched.
+    check("non-Alertmanager card yields no sub-alerts",
+          parse_state_message("state_message: aiWARE - AWS UK (uk-1):Essentials has failed.") == [],
+          "")
+
+
 # --------------------------------------------------------------- guardrails
 
 def test_guardrails() -> None:
@@ -751,6 +1092,27 @@ def test_aws_guards() -> None:
         follow_up.aws_client.list_db_instances = original
 
 
+def test_rds_instance_from_payload() -> None:
+    group("RDS instance resolution from the alert's own labels")
+    from oncall_agent.alert_parser import parse_alert_message
+    from oncall_agent import follow_up
+
+    alert = parse_alert_message({"text": _CARD_RDS, "ts": "1.0"})
+    lines = []
+    # No AWS call is allowed to happen on this path: if the resolver reaches
+    # list_db_instances it will raise here, and the test fails loudly.
+    original = follow_up.aws_client.list_db_instances
+    follow_up.aws_client.list_db_instances = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("resolver called AWS despite a named dbinstance_identifier"))
+    try:
+        got = follow_up._rds_instance_for(alert, lines.append)
+    finally:
+        follow_up.aws_client.list_db_instances = original
+    check("instance read straight from dbinstance_identifier", got == "stage-media-rds2", got)
+    check("and it says where it came from",
+          any("dbinstance_identifier" in line for line in lines), str(lines))
+
+
 def test_promql_scoping() -> None:
     """A cluster-wide rule expression must be scoped to the resource the alert
     named before the re-check quotes a number from it."""
@@ -960,9 +1322,10 @@ def test_mcp_server() -> None:
 
 def main() -> int:
     print("oncall-agent offline tests (no credentials, no network)")
-    for suite in (test_parser, test_guardrails, test_routing, test_specialist_routing,
+    for suite in (test_parser, test_pasted_card, test_replay_payload_flag,
+                 test_inventory_gaps, test_mixed_status_prefix, test_state_message_sub_alerts, test_guardrails, test_routing, test_specialist_routing,
                  test_formatting, test_api_health_pairing, test_follow_up,
-                 test_promql_scoping, test_mention_escaping, test_kubectl_guards,
+                 test_rds_instance_from_payload, test_promql_scoping, test_mention_escaping, test_kubectl_guards,
                  test_aws_guards,
                  test_mcp_server):
         try:

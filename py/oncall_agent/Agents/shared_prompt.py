@@ -25,6 +25,41 @@ block), copy it character-for-character from what a tool returned or what the al
 payload contains — do not reformat it, do not pretty-print it, and do not turn a
 literal backslash-n into an actual line break."""
 
+# The card's own state_message carries Summary, Description and NAMED labels
+# per sub-alert (see alert_parser.parse_state_message). Before 2026-09-12 none
+# of that was parsed and the prompt got it only as an undifferentiated blob
+# inside raw_text, so agents went looking with tools for things the alert had
+# already told them — which node, which pod, which database.
+READ_THE_ALERT_FIRST = """READ THE ALERT'S OWN FIELDS BEFORE REACHING FOR A TOOL:
+The input carries a "sub-alerts parsed from state_message" section whenever the card
+has one. Each entry has `status`, `summary`, `description`, `started`/`resolved`, and
+`labels` with their real NAMES — `node`, `pod`, `dbinstance_identifier`,
+`load_balancer`, `target_group`, `engineName`, `url`, `status`. Those are facts from
+the alert, the same tier of evidence as a tool result.
+- Identify the subject from these fields FIRST. A tool call that rediscovers a name the
+  payload already gave you is wasted, and worse, a discovery step can land on a
+  DIFFERENT resource than the one that alerted.
+- FIRING entries are listed first and are the ones that need an answer. A card mixes
+  firing and resolved freely ("[FIRING:1 RESOLVED:2]") and VictorOps renders the
+  resolved ones at the top, so never take "the first block" as "the problem".
+- The counts are evidence in themselves: 9 sub-alerts on one NodeHighCPUUsage card is 9
+  nodes, and one shared cause across them is the finding, not 9 separate problems.
+- `description` often carries the exact measured value ("VALUE = 92.73020833331464").
+  Quote it rather than re-deriving the number somewhere else.
+- An entry marked `truncated: true` was cut off by VictorOps mid-block. Its missing
+  fields are UNKNOWN, not empty — do not fill them in, and do not describe what is
+  missing as absent.
+- THE LABEL SET VARIES, between alert types and between sub-alerts of the SAME alert.
+  A case library entry listing the labels one card carried is a description of that
+  card, not a schema. Read what is actually present; never assume a label exists, and
+  never say a label is missing when you simply did not look. An extra label is usually
+  the most useful thing on the card — `owner_kind: DaemonSet` on a KubePodsNotReady
+  block answers the blast-radius question outright.
+- No such section means the card carries no such block (Zabbix, Runscope, the NOC health
+  check) or VictorOps already closed the incident and replaced the block with
+  "Automatically resolved". Say the alert gave no detail; do not invent the fields."""
+
+
 CONFIRMED_ONLY = """CONFIRMED DATA ONLY — no guesses, at all:
 Every sentence you post is one of exactly three things: something the ALERT says,
 something a TOOL RESULT says, or a RECOMMENDATION of what a human should check. There

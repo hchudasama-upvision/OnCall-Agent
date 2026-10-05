@@ -171,6 +171,7 @@ def _schema(evidence_keys: List[str]) -> dict:
 from .Agents.shared_prompt import (  # noqa: E402
     BACKTICK_VALUES,
     CONFIRMED_ONLY,
+    READ_THE_ALERT_FIRST,
     EVIDENCE_ECONOMY,
 )
 
@@ -214,7 +215,7 @@ HARD RULES:
   noise, a pending deploy, auto-resolves with no action possible), say so and set
   should_post accordingly — a thread that adds nothing is worse than silence.
 
-""" + CONFIRMED_ONLY + """
+""" + READ_THE_ALERT_FIRST + "\n\n" + CONFIRMED_ONLY + """
 
 """ + EVIDENCE_ECONOMY + """
 

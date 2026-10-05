@@ -33,18 +33,22 @@
     "alertname": "KubePodsNotReady / KubePodCrashLooping",
     "alert_pattern": "[FIRING:N] <cluster> : KubePodsNotReady (often N in the tens; engine pods)",
     "environment": "any aiWARE k8s cluster; usually engine pods",
-    "occurrences_observed": 5,
-    "typical_resolution_minutes": 60,
+    "occurrences_observed": 6,
+    "typical_resolution_minutes": null,
     "diagnosis_steps": [
+      "START FROM THE CARD, not from kubectl: there is one sub-alert PER POD, each with a `pod` label, and sometimes `owner_kind` (observed `DaemonSet` on #121443). That list is what the next step would otherwise have to rebuild, and the SHARED `eng-<8hex>--` prefix across those pod names is the 'one root cause, not N problems' finding - available before any cluster call. Then use kubectl to get what the card cannot carry: current state, exit codes and logs. Remember the card's `namespace` label is the ALERT's (`central-monitoring`), never the pod's (`aiware`).",
       "List not-ready pods and bucket by state: kubectl get pods -n aiware | grep -vE 'Running|Completed' - states seen: ImagePullBackOff, CrashLoopBackOff, Error, Pending/Init",
       "ImagePullBackOff: verify the image tag actually exists in the registry (docker manifest inspect <image>); also check engine BUILD state - builds not in 'Deployed' state have caused pulls of unavailable images",
       "Pending with FailedScheduling: read the event - node taints observed (ToBeDeletedByClusterAutoscaler, uninitialized, network-unavailable) usually mean node churn in progress",
       "Error/CrashLoop: grep pod logs for the failure signature: panic|fatal|context deadline|Throttl|OOM|connection refused",
+      "Engine pods in `Error` (not CrashLoop): grep every one of them for the SAME first failure line before concluding anything - `for p in $(kubectl get pods -n aiware --no-headers | awk '$1 ~ /^eng-<prefix>--/ && $3==\"Error\"{print $1}'); do kubectl logs $p -n aiware | grep -m1 -E 'Failed to connect|terminated due to'; done`. 2026-09-11 on aiw-prod1001: all 8 Error pods showed `SSConnCache.GetConn Failed to connect to edge-storage-server-5...:50051, err=context deadline exceeded` within a 3-minute window, which is what proved one root cause rather than eight.",
+      "When the log names a dependency, check that dependency's CURRENT state before proposing anything: `kubectl get sts,pods -n aiware -o wide | grep edge-storage-server`. It was 9/9 Running and healthy by the time the alert was investigated - the outage had already passed.",
       "Common crash signature: engine toolkit 'Failed to start subprocess [/opt/runner] err=context deadline exceeded' = engine couldn't reach the edge controller at startup",
       "Check node health for the affected pods (kubectl describe node - pressure conditions, Ready history)",
       "Check whether an ongoing change (cluster upgrade, controller rollout, load test) explains it - link the change thread"
     ],
     "resolution_steps": [
+      "Dependency already recovered: the dead pods do NOT clear themselves. Confirm new engine pods are running, then bulk-delete the stale `Error` pods (observed 2026-09-11: 8 pods, 10h old, deleted after edge-storage-server-5 was verified healthy).",
       "Bulk-delete pods stuck in Error so the controller recreates them (observed 3500+ Error pods deleted at once)",
       "If new pods immediately re-enter Error with the same log signature, deleting is futile - the dependency (edge controller / registry) is the problem; fix that first",
       "For engine builds not Deployed: deploy the builds, pods recover",
@@ -54,7 +58,8 @@
     "gotchas": [
       "FIRING count is inflated - 50 crashlooping pods is usually ONE root cause (one engine build, one dependency, one node event)",
       "If controller pods were rolled after the incident window, the relevant logs are gone - note it and move on rather than guessing",
-      "Deleting Error pods without checking the crash signature just burns scheduler cycles when the root cause persists"
+      "Deleting Error pods without checking the crash signature just burns scheduler cycles when the root cause persists",
+      "A pod's age is evidence: 10h-old `Error` pods next to healthy new ones mean the fault is OVER and only the corpses remain. Report it as a past incident with a cleanup, not as an ongoing outage."
     ],
     "escalation": "Engine/platform team when the crash is inside engine code or builds need redeployment",
     "example_commands": [
@@ -62,6 +67,147 @@
       "kubectl logs <pod> -n aiware | grep -iE 'panic|fatal|context deadline|Throttl|OOM'",
       "kubectl get events -n aiware --sort-by=.lastTimestamp | tail -30",
       "docker manifest inspect <registry>/<image>:<tag>"
-    ]
+    ],
+    "known_root_causes": [
+      {
+        "error_code": "SSConnCache.GetConn ... context deadline exceeded",
+        "dependency": "edge-storage-server-<N>.edge-storage-server-service.aiware:50051",
+        "cause": "Engine pods could not reach one edge-storage-server replica at startup and terminated. All 8 failing pods hit the same replica (-5) between 15:33 and 15:35 UTC on 2026-09-10.",
+        "status": "self-recovered - the StatefulSet was 9/9 Running when investigated; the stale Error pods were deleted by hand",
+        "incident_refs": [
+          "#121450"
+        ],
+        "source_permalink": "https://veritone.slack.com/archives/C01F810QM96/p1789092744281539",
+        "verified": true
+      }
+    ],
+    "alert_payload": {
+      "_verified": "incidents #121450, #121465 and #121443, 2026-09-11",
+      "summary": "Pod <pod> not ready in <env>",
+      "description": "Pod has been in a non-ready state for more than 15 minutes.",
+      "labels": [
+        "env",
+        "namespace (always central-monitoring - the ALERT's namespace, NOT the pod's)",
+        "pod",
+        "severity",
+        "owner_kind (ONLY when the pod has a controller - observed 'DaemonSet' on #121443, absent on the bare engine pods of #121450/#121465)"
+      ],
+      "use_it_for": "Every failing pod name is in the card, one sub-alert each - that is the list list_unhealthy_pods would otherwise have to rebuild. The shared `eng-<8hex>--` prefix across them is the engine, and finding one shared prefix across 230 sub-alerts IS the 'one root cause, not N problems' finding.",
+      "trap": "`namespace: central-monitoring` is where the alert rule lives, not where the pod runs (the pods are in `aiware`). Using it as the kubectl namespace returns nothing. Also: the Started stamp can be over a day before the card (#121465 started 2026-09-10 07:59 UTC, resolved 2026-09-11 08:00 UTC) - these are long-lived, so check the age before calling it new.",
+      "_shared": "The parser now hands you these already split out, under 'sub-alerts parsed from state_message', with the FIRING ones listed first. Read them instead of re-reading the raw card. The block is only present while the incident is live — once VictorOps closes it the whole thing is replaced by 'Automatically resolved', and a block can be marked truncated, which means its missing fields are UNKNOWN rather than empty.",
+      "labels_vary": "THE LABEL SET IS NOT FIXED, not even between sub-alerts of the SAME alert. Read the labels each block actually carries; never assume a label is there and never report one as absent from memory. `owner_kind` is the example that matters here: when it is present it answers the blast-radius question directly - `owner_kind: DaemonSet` is the signal to lead with the node spread, per the DaemonSet rule in the pod format - and when it is absent the pod is unowned and deleting it will NOT bring it back."
+    },
+    "resolution_time_note": "No single typical duration, and the old '60' was wrong. Measured from the cards' own Started/Resolved stamps: `9` minutes for a DaemonSet pod that self-recovered (#121443) and `1441` minutes - a full day - for an engine pod on #121465 that sat not-ready from 2026-09-10 07:59 UTC to 2026-09-11 08:00 UTC. Check the Started stamp before calling one of these new; a day-old pod is a cleanup, not an outage. (Found 2026-09-12 by py/scripts/inventory_gaps.py as RESOLUTION TIME DRIFT.)"
+  },
+  {
+    "fingerprint": "NodeHighCPUUsage/aiware-clusters",
+    "alertname": "NodeHighCPUUsage",
+    "alert_pattern": "[FIRING:N] <cluster> : NodeHighCPUUsage - Node <node>.ec2.internal [<server_type>, <zone>] in cluster <cluster> has CPU above 90% for 15+ minutes. VALUE = <pct>",
+    "environment": "aiw-prod1001 and aiw-prd5001 observed; labels carry env, node, instance (<ip>:9100), server_type, zone",
+    "occurrences_observed": 9,
+    "typical_resolution_minutes": 12,
+    "resolution_time_note": "Measured from the alert's own Started/Resolved stamps across 7 sub-alerts on 2026-09-11: 1, 1, 12, 12, 12, 12 and 15 minutes. It auto-resolves without anyone touching the node - the NOC posts the WHY, not a fix.",
+    "diagnosis_steps": [
+      "The alert names the node in its labels (`node`, and `instance` as <ip>:9100). That is the only thing it names - which pod is burning the CPU is not in the alert.",
+      "Rank the nodes: `kubectl top nodes --sort-by=cpu`. Confirms the alerting node is really at the top and shows whether it is one node or several (2026-09-10 on aiw-prd5001: three nodes at 98-99% simultaneously).",
+      "Find what is running there: `kubectl top pods -n aiware --sort-by=cpu` filtered to that node. In every observed case the answer was engine pods named `eng-<engineId prefix>--<taskId>`.",
+      "Turn the pod-name prefix into an engine: the 8 hex chars after `eng-` are the head of the engine ID. 2026-09-10: `eng-90fcaf22--*` = `90fcaf22-048c-4a2a-83b0-717057184df1` = 'Pangeanic Translation (2022) - Traditional Chinese to English', pulling over 4,000 mCPU per pod.",
+      "Say how much work is in flight - the count of RUNNING/PENDING tasks for that engine is the number that explains the CPU (2026-09-11: '179 tasks in a running state').",
+      "Screenshot the pod CPU view and the task view; those two pictures plus the node name are the whole thread."
+    ],
+    "resolution_steps": [
+      "Report the driving engine, its pod CPU and its running/pending task count, and stop. Every observed occurrence auto-resolved as the tasks finished.",
+      "Escalate only if the same engine pins the same node repeatedly, or if the node is NOT `server_type: engine_segregated` - engine load on a non-engine node is the abnormal case."
+    ],
+    "gotchas": [
+      "`server_type: engine_segregated` means the node exists to run engine workload. Near-100% CPU there is saturation by design, not a fault - do not report it as a failure.",
+      "VALUE in the description is the exact CPU percent at evaluation time (observed 90.19 to 99.99) - quote it rather than re-deriving it.",
+      "Several sub-alerts arrive under one incident ([FIRING:9] on incident #121477) and they are usually different nodes driven by the SAME engine - find the shared engine, do not report N separate problems.",
+      "It resolves itself in about 12 minutes, so by the time the investigation runs the node may already be normal. Say the window it covered; a recovered node is a finding, not a failed investigation.",
+      "The node is named `ip-10-0-x-y.ec2.internal` while `instance` is `10.0.x.y:9100` - the same machine in two spellings."
+    ],
+    "escalation": "Engine team only when one engine repeatedly saturates nodes; otherwise no escalation - the NOC posts the driving engine and the task count.",
+    "example_commands": [
+      "kubectl top nodes --sort-by=cpu",
+      "kubectl top pods -n aiware --sort-by=cpu | head -20",
+      "kubectl get pods -n aiware -o wide --no-headers | awk '$8==\"<node>\"' | grep '^eng-'"
+    ],
+    "_source": "Built 2026-09-11 from two real #comms-noc threads plus the Started/Resolved stamps of 7 sub-alerts in #alerts-devops.",
+    "source_permalinks": [
+      "https://veritone.slack.com/archives/C01F810QM96/p1789108924522309",
+      "https://veritone.slack.com/archives/C01F810QM96/p1789012889488219"
+    ],
+    "alert_payload": {
+      "_verified": "incident #121477, 2026-09-11, read from the real card",
+      "summary": "High CPU: <server_type> node in <env> (<zone>) - names the ROLE and the zone, not the node.",
+      "description": "Node <node>.ec2.internal [<server_type>, <zone>] in cluster <env> has CPU above 90% for 15+ minutes. VALUE = <exact percent>. The node AND the exact percent are both here - quote VALUE rather than re-deriving the number from a graph.",
+      "labels": [
+        "env",
+        "instance (<ip>:9100, node-exporter)",
+        "namespace",
+        "node",
+        "server_type",
+        "severity",
+        "zone"
+      ],
+      "use_it_for": "`node` is the kubectl target and `instance` is the same machine as Prometheus knows it - no lookup needed. `server_type: engine_segregated` is what tells you saturation is by design. One card carries one sub-alert PER NODE, so the firing count is a node count.",
+      "trap": "VictorOps renders RESOLVED sub-alerts FIRST. The node in the first block is often the one that already recovered; investigate a FIRING one. label_hints already prefers firing for this reason.",
+      "_shared": "The parser now hands you these already split out, under 'sub-alerts parsed from state_message', with the FIRING ones listed first. Read them instead of re-reading the raw card. The block is only present while the incident is live — once VictorOps closes it the whole thing is replaced by 'Automatically resolved', and a block can be marked truncated, which means its missing fields are UNKNOWN rather than empty."
+    }
+  },
+  {
+    "fingerprint": "ArgoCD/ops",
+    "alertname": "ArgoCD App Unhealthy / ArgoCD AutoSync Disabled",
+    "alert_pattern": "[FIRING:N]  : ArgoCD App Unhealthy  |  [FIRING:N]  : ArgoCD AutoSync Disabled (the environment segment is EMPTY on both - argocd-prod is in the labels, not the title)",
+    "environment": "argocd-prod (argocd5.ops.veritone.com); the App's own dest_namespace/dest_server say which cluster it targets",
+    "occurrences_observed": 2,
+    "typical_resolution_minutes": null,
+    "resolution_time_note": "Not self-resolving. The one fully diagnosed occurrence needed a human ownership decision and was still open when the thread ended.",
+    "diagnosis_steps": [
+      "Name the Application. AutoSync Disabled puts it in the summary ('ArgoCD auto-sync disabled for aiware-stgqrf') with the App URL in the description; App Unhealthy needs the ArgoCD UI to identify it (observed: `gitops-xk5-bootstrap` in Degraded state).",
+      "Open the App in ArgoCD and read WHICH resources are degraded - the App-level status is a rollup and says nothing on its own.",
+      "For a Degraded App, the degraded child resources are the finding (observed: 2 SealedSecret objects reporting `failed update`).",
+      "For AutoSync Disabled, the labels carry `autosync_enabled: false`, `health_status`, `dest_namespace` and `dest_server` - report those and whether anyone announced disabling it deliberately.",
+      "Check #comms-noc and the change channels for a deploy or ITSM window that explains a deliberately disabled auto-sync before treating it as a fault."
+    ],
+    "resolution_steps": [
+      "SealedSecret ownership conflict: a human decides who should own the Secret. The sealed-secrets controller will never overwrite a Secret it does not own, so it refuses, reports `failed update`, and stays Degraded until that decision is made.",
+      "Re-syncing is not a fix for that case and must not be proposed - the controller will refuse again.",
+      "Auto-sync disabled on purpose for a deploy or migration: report the owning change and leave it."
+    ],
+    "gotchas": [
+      "Degraded does NOT mean down. In the observed SealedSecret case both clusters kept working - the old Secret was present and valid. It is an ownership conflict, not an outage, and the thread must say so or it reads as a production incident.",
+      "Auto-sync will never clear this by itself, and repeated re-syncs will not either - stating that saves the next person from trying.",
+      "The alert title's environment segment is empty on both variants, so the usual '<env> : <alertname>' split yields nothing - take the environment from the labels."
+    ],
+    "escalation": "The team that owns the Application and, for a SealedSecret conflict, whoever owns the conflicting Secret - that ownership call is the actual blocker.",
+    "example_commands": [
+      "kubectl get application <app> -n argocd -o jsonpath='{.status.health}{\"\\n\"}{.status.sync}'",
+      "kubectl get sealedsecret -n <dest_namespace>"
+    ],
+    "_source": "Built 2026-09-11 from the #comms-noc thread on incident #121427 and the #alerts-devops payload of incident #121475.",
+    "source_permalinks": [
+      "https://veritone.slack.com/archives/C01F810QM96/p1789072251301969"
+    ],
+    "alert_payload": {
+      "_verified": "incident #121475, 2026-09-11 (AutoSync Disabled variant)",
+      "summary": "ArgoCD auto-sync disabled for <app>",
+      "description": "App <app> (project <project>, namespace <ns>) has had autosync_enabled=false for over 10 minutes. App: <the argocd5.ops.veritone.com URL>. The App URL is in the payload - cite it rather than constructing one.",
+      "labels": [
+        "autosync_enabled",
+        "container",
+        "dest_namespace",
+        "dest_server",
+        "endpoint",
+        "environment (argocd-prod)",
+        "exported_namespace",
+        "health_status",
+        "instance",
+        "job"
+      ],
+      "use_it_for": "`health_status` says whether the App is Healthy while auto-sync is off - Healthy + autosync-disabled is a config state, not an outage. `dest_server`/`dest_namespace` name the cluster and namespace the App targets, which is what makes the blast radius concrete.",
+      "trap": "`environment: argocd-prod` is the ArgoCD instance, not the target env - `dest_server` is the target.",
+      "_shared": "The parser now hands you these already split out, under 'sub-alerts parsed from state_message', with the FIRING ones listed first. Read them instead of re-reading the raw card. The block is only present while the incident is live — once VictorOps closes it the whole thing is replaced by 'Automatically resolved', and a block can be marked truncated, which means its missing fields are UNKNOWN rather than empty."
+    }
   }
 ]
